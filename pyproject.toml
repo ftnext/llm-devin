@@ -1,0 +1,28 @@
+[project]
+name = "llm-devin"
+version = "0.1"
+description = ""
+readme = "README.md"
+authors = [{name = "nikkie"}]
+license = "Apache-2.0"
+classifiers = []
+requires-python = ">=3.9"
+dependencies = [
+    "llm"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/ftnext/llm-devin"
+Changelog = "https://github.com/ftnext/llm-devin/releases"
+Issues = "https://github.com/ftnext/llm-devin/issues"
+CI = "https://github.com/ftnext/llm-devin/actions"
+
+[project.entry-points.llm]
+devin = "llm_devin"
+
+[project.optional-dependencies]
+test = ["pytest"]
