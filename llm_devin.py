@@ -4,8 +4,8 @@ import llm
 
 @llm.hookimpl
 def register_commands(cli):
-    return
-    # @cli.command()
-    # def hello_world():
-    #     "Say hello world"
-    #     click.echo("Hello world!")
+    @cli.command()
+    @click.argument("name")
+    def devin(name):
+        "Act as Devin AI"
+        click.echo(f"Hello from Devin AI to {name}!")
