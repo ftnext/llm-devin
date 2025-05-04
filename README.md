@@ -15,21 +15,26 @@ llm install llm-devin
 ```
 ## Usage
 
-Usage instructions go here.
+**prerequisite**: Devin API key (Devin Team Plan)  
+https://docs.devin.ai/api-reference/overview#get-an-api-key
+
+```bash
+export LLM_DEVIN_KEY=your_api_key_here
+
+llm -m devin "Hello, Devin"
+```
 
 ## Development
 
-To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+To set up this plugin locally, first checkout the code:
 ```bash
 cd llm-devin
-python -m venv venv
-source venv/bin/activate
 ```
-Now install the dependencies and test dependencies:
+Then create a new virtual environment and install the dependencies and test dependencies:
 ```bash
-python -m pip install -e '.[test]'
+uv sync --extra '.[test]'
 ```
 To run the tests:
 ```bash
-python -m pytest
+uv run pytest
 ```
