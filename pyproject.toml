@@ -1,11 +1,25 @@
 [project]
 name = "llm-devin"
-version = "0.1"
-description = ""
+version = "0.0.1"
+description = "LLM plugin to access Devin API"
 readme = "README.md"
-authors = [{name = "nikkie"}]
+authors = [{ name = "nikkie", email = "takuyafjp+develop@gmail.com" }]
 license = "Apache-2.0"
-classifiers = []
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+    "Topic :: Utilities",
+]
 requires-python = ">=3.9"
 dependencies = [
     "llm",
