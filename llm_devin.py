@@ -12,6 +12,9 @@ logger = configureLogger(
     format="%(asctime)s | %(levelname)s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
 )
 
+TIMEOUT = httpx.Timeout(5.0, read=10.0)
+
+
 class DevinModel(llm.KeyModel):
     needs_key = "devin"
     key_env_var = "LLM_DEVIN_KEY"
@@ -27,6 +30,7 @@ class DevinModel(llm.KeyModel):
             "https://api.devin.ai/v1/sessions",
             headers={"Authorization": f"Bearer {os.getenv('LLM_DEVIN_KEY')}"},
             json=request_json,
+            timeout=TIMEOUT,
         )
         create_session_response.raise_for_status()
 
@@ -37,11 +41,12 @@ class DevinModel(llm.KeyModel):
             session_detail = httpx.get(
                 f"https://api.devin.ai/v1/session/{session_id}",
                 headers={"Authorization": f"Bearer {os.getenv('LLM_DEVIN_KEY')}"},
+                timeout=TIMEOUT,
             )
             session_detail.raise_for_status()
             session_detail_json = session_detail.json()
             logger.debug("Session detail: %s", session_detail_json)
-            if session_detail_json["status_enum"] in {"blocked", "stopped"}:
+            if session_detail_json["status_enum"] in {"blocked", "stopped", "finished"}:
                 break
             time.sleep(5)
 
