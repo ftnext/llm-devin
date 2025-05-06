@@ -32,7 +32,7 @@ cd llm-devin
 ```
 Then create a new virtual environment and install the dependencies and test dependencies:
 ```bash
-uv sync --extra '.[test]'
+uv sync --extra test
 ```
 To run the tests:
 ```bash
