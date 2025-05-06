@@ -1,9 +1,16 @@
+import logging
 import os
 import time
 
 import httpx
 import llm
+from happy_python_logging.app import configureLogger
 
+logger = configureLogger(
+    __name__,
+    level=logging.DEBUG,
+    format="%(asctime)s | %(levelname)s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
+)
 
 class DevinModel(llm.KeyModel):
     needs_key = "devin"
@@ -14,10 +21,12 @@ class DevinModel(llm.KeyModel):
         self.model_id = "devin"
 
     def execute(self, prompt, stream, response, conversation, key):
+        request_json = {"prompt": prompt.prompt, "idempotent": True}
+        logger.debug("Request JSON: %s", request_json)
         create_session_response = httpx.post(
             "https://api.devin.ai/v1/sessions",
             headers={"Authorization": f"Bearer {os.getenv('LLM_DEVIN_KEY')}"},
-            json={"prompt": prompt.prompt, "idempotent": True},
+            json=request_json,
         )
         create_session_response.raise_for_status()
 
@@ -31,6 +40,7 @@ class DevinModel(llm.KeyModel):
             )
             session_detail.raise_for_status()
             session_detail_json = session_detail.json()
+            logger.debug("Session detail: %s", session_detail_json)
             if session_detail_json["status_enum"] in {"blocked", "stopped"}:
                 break
             time.sleep(5)

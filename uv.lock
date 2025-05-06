@@ -105,6 +105,18 @@ wheels = [
 ]
 
 [[package]]
+name = "happy-python-logging"
+version = "0.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ef/8c/0d799fc79295fa605e33c6c71c83bfb3ef03ce9924e804b59f790c6947b1/happy_python_logging-0.0.3.tar.gz", hash = "sha256:426091a7c5ab0a2c98c24acb4ff5bf0bda0efaab7961ade26f764f317b741f03", size = 5438 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/2d/1da580e435ea50fbe312e4485836b07a94c40e564c133862da3088c4672e/happy_python_logging-0.0.3-py3-none-any.whl", hash = "sha256:27f6b1475494b67e8ebd7330ce066a4d8d9380e6faf47a0b680ed0ad8e39ef5c", size = 4167 },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -248,9 +260,10 @@ wheels = [
 
 [[package]]
 name = "llm-devin"
-version = "0.1"
+version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "happy-python-logging" },
     { name = "httpx" },
     { name = "llm" },
 ]
@@ -263,6 +276,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "happy-python-logging" },
     { name = "httpx" },
     { name = "llm" },
     { name = "pytest", marker = "extra == 'test'" },
