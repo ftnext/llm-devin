@@ -1,7 +1,6 @@
 from unittest.mock import MagicMock
 
 import httpx
-import pytest
 import respx
 from llm.plugins import load_plugins, pm
 
@@ -15,13 +14,8 @@ def test_plugin_is_installed():
     assert "llm_devin" in names
 
 
-@pytest.fixture
-def mock_env(monkeypatch):
-    monkeypatch.setenv("LLM_DEVIN_KEY", "test-api-key")
-
-
 @respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_execute_flow(respx_mock, mock_env):
+def test_execute_flow(respx_mock):
     respx_mock.post(
         "https://api.devin.ai/v1/sessions",
         headers__contains={"Authorization": "Bearer test-api-key"},

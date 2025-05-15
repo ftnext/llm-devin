@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 
 import httpx
@@ -24,11 +23,12 @@ class DevinModel(llm.KeyModel):
         self.model_id = "devin"
 
     def execute(self, prompt, stream, response, conversation, key):
+        headers = {"Authorization": f"Bearer {key}"}
         request_json = {"prompt": prompt.prompt, "idempotent": True}
         logger.debug("Request JSON: %s", request_json)
         create_session_response = httpx.post(
             "https://api.devin.ai/v1/sessions",
-            headers={"Authorization": f"Bearer {os.getenv('LLM_DEVIN_KEY')}"},
+            headers=headers,
             json=request_json,
             timeout=TIMEOUT,
         )
@@ -40,7 +40,7 @@ class DevinModel(llm.KeyModel):
         while True:
             session_detail = httpx.get(
                 f"https://api.devin.ai/v1/session/{session_id}",
-                headers={"Authorization": f"Bearer {os.getenv('LLM_DEVIN_KEY')}"},
+                headers=headers,
                 timeout=TIMEOUT,
             )
             session_detail.raise_for_status()
