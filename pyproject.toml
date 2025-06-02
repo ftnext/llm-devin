@@ -21,11 +21,12 @@ classifiers = [
     "Topic :: Utilities",
 ]
 keywords = ["llm", "devin"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "llm",
     "httpx",
     "happy-python-logging",
+    "mcp",
 ]
 
 [tool.setuptools]
