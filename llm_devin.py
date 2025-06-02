@@ -55,6 +55,46 @@ class DevinModel(llm.KeyModel):
                 yield message["message"]
 
 
+class DeepWikiMCP(llm.Toolbox):
+    """MCP integration for DeepWiki repository analysis"""
+    
+    def __init__(self, repository: str):
+        self.repository = repository
+        self.server_url = "https://mcp.deepwiki.com/sse"
+    
+    async def ask_question(self, question: str) -> str:
+        """Ask a question about the configured repository using DeepWiki MCP"""
+        from mcp.client.session import ClientSession
+        from mcp.client.sse import sse_client
+        
+        try:
+            async with sse_client(url=self.server_url, timeout=60) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    
+                    arguments = {"repoName": self.repository, "question": question}
+                    result = await session.call_tool("ask_question", arguments)
+                    
+                    if hasattr(result, "content"):
+                        response_parts = []
+                        for content in result.content:
+                            if content.type == "text":
+                                response_parts.append(content.text)
+                            else:
+                                response_parts.append(str(content))
+                        return "\n".join(response_parts)
+                    else:
+                        return str(result)
+                        
+        except Exception as e:
+            return f"Error connecting to DeepWiki MCP server: {e}"
+
+
 @llm.hookimpl
 def register_models(register):
     register(DevinModel())
+
+
+@llm.hookimpl
+def register_tools(register):
+    register(DeepWikiMCP)
