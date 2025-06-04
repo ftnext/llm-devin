@@ -1,10 +1,11 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import respx
 from llm.plugins import load_plugins, pm
+from mcp.types import CallToolResult, TextContent
 
-from llm_devin import DevinModel
+from llm_devin import DeepWikiModel, DevinModel
 
 
 def test_plugin_is_installed():
@@ -71,3 +72,32 @@ def test_execute_flow(respx_mock):
         actual[0]
         == "Hello! I'm doing well, thank you for asking. How can I assist you today?"
     )
+
+
+@patch("llm_devin.DeepWikiClient.run")
+def test_deepwiki_execute(client_run):
+    client_run.return_value = CallToolResult(
+        isError=False,
+        content=[
+            TextContent(
+                type="text", text="DeepWiki markdown for repository ftnext/llm-devin"
+            )
+        ],
+    )
+
+    sut = DeepWikiModel()
+    prompt = MagicMock()
+    prompt.prompt = "Summarize this repository."
+    prompt.options.repository = "ftnext/llm-devin"
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+        )
+    )
+
+    assert len(actual) == 1
+    assert actual[0] == "DeepWiki markdown for repository ftnext/llm-devin"
