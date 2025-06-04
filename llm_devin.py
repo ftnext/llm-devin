@@ -15,6 +15,10 @@ from pydantic import Field
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
 
+# Suppress "Unknown SSE event: ping" from DeepWiki MCP server.
+# ref: https://github.com/modelcontextprotocol/python-sdk/blob/v1.9.2/src/mcp/client/sse.py#L113-L116
+logging.getLogger("mcp.client.sse").addHandler(logging.NullHandler())
+
 logger = configureLogger(
     __name__,
     level=logging.DEBUG,
