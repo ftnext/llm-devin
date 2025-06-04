@@ -28,9 +28,6 @@ dependencies = [
     "mcp",
 ]
 
-[tool.setuptools]
-py-modules = ["llm_devin"]
-
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
