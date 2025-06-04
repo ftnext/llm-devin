@@ -15,6 +15,8 @@ llm install llm-devin
 ```
 ## Usage
 
+### Devin API
+
 **prerequisite**: Devin API key (Devin Team Plan)  
 https://docs.devin.ai/api-reference/overview#get-an-api-key
 
@@ -22,6 +24,12 @@ https://docs.devin.ai/api-reference/overview#get-an-api-key
 export LLM_DEVIN_KEY=your_api_key_here
 
 llm -m devin "Hello, Devin"
+```
+
+### DeepWiki
+
+```bash
+llm -m deepwiki -o repository ftnext/llm-devin "Summarize this repository"
 ```
 
 ## Development
