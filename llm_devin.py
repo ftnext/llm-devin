@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import llm
-from happy_python_logging.app import configureLogger
+# from happy_python_logging.app import configureLogger
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from pydantic import Field
@@ -19,11 +19,12 @@ if TYPE_CHECKING:
 # ref: https://github.com/modelcontextprotocol/python-sdk/blob/v1.9.2/src/mcp/client/sse.py#L113-L116
 logging.getLogger("mcp.client.sse").addHandler(logging.NullHandler())
 
-logger = configureLogger(
-    __name__,
-    level=logging.DEBUG,
-    format="%(asctime)s | %(levelname)s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
-)
+logger = logging.getLogger(__name__)
+# logger = configureLogger(
+#     __name__,
+#     level=logging.DEBUG,
+#     format="%(asctime)s | %(levelname)s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
+# )
 
 TIMEOUT = httpx.Timeout(5.0, read=10.0)
 
