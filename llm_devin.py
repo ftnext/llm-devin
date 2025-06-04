@@ -1,5 +1,9 @@
+from __future__ import annotations
+
+import asyncio
 import logging
 import time
+from typing import TYPE_CHECKING
 
 import httpx
 import llm
@@ -7,6 +11,9 @@ from happy_python_logging.app import configureLogger
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from pydantic import Field
+
+if TYPE_CHECKING:
+    from mcp.types import CallToolResult
 
 logger = configureLogger(
     __name__,
@@ -58,26 +65,10 @@ class DevinModel(llm.KeyModel):
                 yield message["message"]
 
 
-class DeepWikiSyncModel(llm.Model):
-    model_id = "deepwiki"
-
-    def execute(self, prompt, stream, response, conversation):
-        yield "Not implemented yet. Please use the async version instead."
-
-
-class DeepWikiAsyncModel(llm.AsyncModel):
-    model_id = "deepwiki"
-    needs_key = False
-    can_stream = False
-
+class DeepWikiClient:
     SERVER_URL = "https://mcp.deepwiki.com/sse"
 
-    class Options(llm.Options):
-        repository: str = Field(
-            description="GitHub repository URL: owner/repo",
-        )
-
-    async def execute(self, prompt, stream, response, conversation):
+    async def run(self, repository: str, question: str) -> CallToolResult:
         async with sse_client(url=self.SERVER_URL, timeout=60) as (
             read_stream,
             write_stream,
@@ -86,19 +77,32 @@ class DeepWikiAsyncModel(llm.AsyncModel):
                 await session.initialize()
                 logger.debug("Initialized DeepWiki MCP session")
 
-                arguments = {
-                    "repoName": prompt.options.repository,
-                    "question": prompt.prompt,
-                }
+                arguments = {"repoName": repository, "question": question}
                 logger.debug("Calling ask_question tool with arguments: %s", arguments)
 
-                result = await session.call_tool("ask_question", arguments)
-                for content in result.content:
-                    if content.type == "text":
-                        yield content.text
+                return await session.call_tool("ask_question", arguments)
+
+
+class DeepWikiModel(llm.Model):
+    model_id = "deepwiki"
+    needs_key = False
+    can_stream = False
+
+    class Options(llm.Options):
+        repository: str = Field(
+            description="GitHub repository URL: owner/repo",
+        )
+
+    def execute(self, prompt, stream, response, conversation):
+        client = DeepWikiClient()
+        result = asyncio.run(client.run(prompt.options.repository, prompt.prompt))
+
+        for content in result.content:
+            if content.type == "text":
+                yield content.text
 
 
 @llm.hookimpl
 def register_models(register):
     register(DevinModel())
-    register(DeepWikiSyncModel(), DeepWikiAsyncModel())
+    register(DeepWikiModel())
