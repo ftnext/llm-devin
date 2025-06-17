@@ -257,7 +257,7 @@ wheels = [
 
 [[package]]
 name = "llm-devin"
-version = "0.0.2"
+version = "0.0.3"
 source = { editable = "." }
 dependencies = [
     { name = "happy-python-logging" },
