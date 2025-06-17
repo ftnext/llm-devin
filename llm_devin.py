@@ -53,21 +53,30 @@ class DevinModel(llm.KeyModel):
         print("Devin URL:", create_session_response.json()["url"])
 
         while True:
-            session_detail = httpx.get(
-                f"https://api.devin.ai/v1/session/{session_id}",
-                headers=headers,
-                timeout=TIMEOUT,
-            )
-            session_detail.raise_for_status()
-            session_detail_json = session_detail.json()
-            logger.debug("Session detail: %s", session_detail_json)
-            if session_detail_json["status_enum"] in {"blocked", "stopped", "finished"}:
-                break
+            try:
+                session_detail = self._get_session_detail(headers, session_id)
+            except (httpx.RequestError, httpx.HTTPStatusError):
+                pass
+            else:
+                if session_detail["status_enum"] in {"blocked", "stopped", "finished"}:
+                    break
             time.sleep(5)
 
-        for message in session_detail_json["messages"]:
+        for message in session_detail["messages"]:
             if message["type"] == "devin_message":
                 yield message["message"]
+
+    def _get_session_detail(self, headers, session_id):
+        timeout = httpx.Timeout(5.0, read=10.0)
+        session_detail = httpx.get(
+            f"https://api.devin.ai/v1/session/{session_id}",
+            headers=headers,
+            timeout=timeout,
+        )
+        session_detail.raise_for_status()
+        session_detail_json = session_detail.json()
+        logger.debug("Session detail: %s", session_detail_json)
+        return session_detail_json
 
 
 class DeepWikiClient:
