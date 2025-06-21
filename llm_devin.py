@@ -54,19 +54,25 @@ class DevinModel(llm.KeyModel):
         print("Devin URL:", create_session_response.json()["url"])
         sys.stdout.flush()
 
+        yielded_message_count = 0
+
         while True:
             try:
                 session_detail = self._get_session_detail(headers, session_id)
             except (httpx.RequestError, httpx.HTTPStatusError):
                 pass
             else:
+                # Yield new messages incrementally
+                messages = session_detail["messages"]
+                for i in range(yielded_message_count, len(messages)):
+                    message = messages[i]
+                    if message["type"] == "devin_message":
+                        yield message["message"]
+                yielded_message_count = len(messages)
+
                 if session_detail["status_enum"] in {"blocked", "stopped", "finished"}:
                     break
             time.sleep(5)
-
-        for message in session_detail["messages"]:
-            if message["type"] == "devin_message":
-                yield message["message"]
 
     def _get_session_detail(self, headers, session_id):
         timeout = httpx.Timeout(5.0, read=10.0)
