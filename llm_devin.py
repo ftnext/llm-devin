@@ -33,7 +33,7 @@ TIMEOUT = httpx.Timeout(5.0, read=10.0)
 class DevinModel(llm.KeyModel):
     needs_key = "devin"
     key_env_var = "LLM_DEVIN_KEY"
-    can_stream = False
+    can_stream = True
 
     def __init__(self) -> None:
         self.model_id = "devin"
