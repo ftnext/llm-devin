@@ -61,6 +61,7 @@ class DevinModel(llm.KeyModel):
 
         yielded_message_count = 0
 
+        devin_messages = []
         while True:
             try:
                 session_detail = self._get_session_detail(headers, session_id)
@@ -72,10 +73,12 @@ class DevinModel(llm.KeyModel):
                 for i in range(yielded_message_count, len(messages)):
                     message = messages[i]
                     if message["type"] == "devin_message":
-                        msg = message["message"]
-                        if not msg.endswith("\n"):
-                            msg += "\n"
-                        yield msg
+                        devin_message = message["message"]
+                        if len(devin_messages) == 0:
+                            yield devin_message
+                        else:
+                            yield "\n" + devin_message
+                        devin_messages.append(devin_message)
                 yielded_message_count = len(messages)
 
                 if session_detail["status_enum"] in {"blocked", "stopped", "finished"}:
