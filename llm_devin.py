@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 TIMEOUT = httpx.Timeout(5.0, read=10.0)
 
 
+def print_immediately(*objects) -> None:
+    # ref: https://github.com/simonw/llm/blob/0.26/llm/cli.py#L867-L868
+    print(*objects)
+    sys.stdout.flush()
+
+
 class DevinModel(llm.KeyModel):
     needs_key = "devin"
     key_env_var = "LLM_DEVIN_KEY"
@@ -51,8 +57,7 @@ class DevinModel(llm.KeyModel):
         create_session_response.raise_for_status()
 
         session_id = create_session_response.json().get("session_id")
-        print("Devin URL:", create_session_response.json()["url"])
-        sys.stdout.flush()
+        print_immediately("Devin URL:", create_session_response.json()["url"])
 
         yielded_message_count = 0
 
