@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 import llm
@@ -45,6 +45,12 @@ class DevinModel(llm.KeyModel):
 
     BASE_URL = "https://api.devin.ai/v3"
 
+    class Options(llm.Options):
+        debug: Optional[bool] = Field(
+            description="Enable debug logging of API responses to JSONL file",
+            default=False,
+        )
+
     def __init__(self) -> None:
         self.model_id = "devin"
 
@@ -56,8 +62,8 @@ class DevinModel(llm.KeyModel):
             )
         return org_id
 
-    def _setup_debug_logging(self) -> logging.FileHandler | None:
-        if not logger.isEnabledFor(logging.DEBUG):
+    def _setup_debug_logging(self, debug: bool) -> logging.FileHandler | None:
+        if not debug:
             return None
         log_dir = llm.user_dir() / "devin"
         log_dir.mkdir(exist_ok=True)
@@ -67,6 +73,7 @@ class DevinModel(llm.KeyModel):
         handler.setFormatter(JsonFormatter(timestamp=True))
         handler.setLevel(logging.DEBUG)
         logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
         print_immediately(f"Debug log: {log_file}")
         return handler
 
@@ -78,7 +85,8 @@ class DevinModel(llm.KeyModel):
             handler.close()
 
     def execute(self, prompt, stream, response, conversation, key):
-        handler = self._setup_debug_logging()
+        debug = prompt.options.debug or False
+        handler = self._setup_debug_logging(debug)
         try:
             yield from self._execute(
                 prompt, stream, response, conversation, key

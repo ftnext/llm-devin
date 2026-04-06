@@ -2,7 +2,6 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import json
-import logging
 
 import llm
 import pytest
@@ -339,25 +338,20 @@ def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
     ).mock(return_value=httpx.Response(200, json=messages_data))
 
-    llm_devin_logger = logging.getLogger("llm_devin")
-    original_level = llm_devin_logger.level
-    llm_devin_logger.setLevel(logging.DEBUG)
-    try:
-        sut = DevinModel()
-        prompt = MagicMock()
-        prompt.prompt = "Hello"
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello"
+    prompt.options.debug = True
 
-        list(
-            sut.execute(
-                prompt,
-                stream=False,
-                response=MagicMock(),
-                conversation=MagicMock(),
-                key="test-api-key",
-            )
+    list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+            key="test-api-key",
         )
-    finally:
-        llm_devin_logger.setLevel(original_level)
+    )
 
     log_dir = tmp_path / "devin"
     assert log_dir.exists()
@@ -392,7 +386,7 @@ def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
 
 
 @respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_no_debug_logging_when_not_debug_level(
+def test_no_debug_logging_when_debug_option_is_false(
     monkeypatch, respx_mock, tmp_path
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
@@ -442,25 +436,20 @@ def test_no_debug_logging_when_not_debug_level(
         )
     )
 
-    llm_devin_logger = logging.getLogger("llm_devin")
-    original_level = llm_devin_logger.level
-    llm_devin_logger.setLevel(logging.WARNING)
-    try:
-        sut = DevinModel()
-        prompt = MagicMock()
-        prompt.prompt = "Hello"
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello"
+    prompt.options.debug = False
 
-        list(
-            sut.execute(
-                prompt,
-                stream=False,
-                response=MagicMock(),
-                conversation=MagicMock(),
-                key="test-api-key",
-            )
+    list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+            key="test-api-key",
         )
-    finally:
-        llm_devin_logger.setLevel(original_level)
+    )
 
     log_dir = tmp_path / "devin"
     assert not log_dir.exists()
