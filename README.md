@@ -17,11 +17,14 @@ llm install llm-devin
 
 ### Devin API
 
-**prerequisite**: Devin API key (Devin Team Plan)  
-https://docs.devin.ai/api-reference/overview#get-an-api-key
+**prerequisite**: Devin API key and Organization ID (Devin Team Plan)  
+https://docs.devin.ai/api-reference/overview
+
+Set up a service user and get your organization ID from **Settings > Service users**.
 
 ```bash
 export LLM_DEVIN_KEY=your_api_key_here
+export LLM_DEVIN_ORG_ID=your_org_id_here
 
 llm -m devin "Hello, Devin"
 ```

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import time
 from typing import TYPE_CHECKING
@@ -41,61 +42,116 @@ class DevinModel(llm.KeyModel):
     key_env_var = "LLM_DEVIN_KEY"
     can_stream = True
 
+    BASE_URL = "https://api.devin.ai/v3"
+
     def __init__(self) -> None:
         self.model_id = "devin"
 
+    def _org_id(self) -> str:
+        org_id = os.environ.get("LLM_DEVIN_ORG_ID", "")
+        if not org_id:
+            raise llm.ModelError(
+                "LLM_DEVIN_ORG_ID environment variable is required"
+            )
+        return org_id
+
     def execute(self, prompt, stream, response, conversation, key):
+        org_id = self._org_id()
         headers = {"Authorization": f"Bearer {key}"}
-        request_json = {"prompt": prompt.prompt, "idempotent": True}
+        request_json = {"prompt": prompt.prompt}
         logger.debug("Request JSON: %s", request_json)
         create_session_response = httpx.post(
-            "https://api.devin.ai/v1/sessions",
+            f"{self.BASE_URL}/organizations/{org_id}/sessions",
             headers=headers,
             json=request_json,
             timeout=TIMEOUT,
         )
         create_session_response.raise_for_status()
 
-        session_id = create_session_response.json().get("session_id")
-        print_immediately("Devin URL:", create_session_response.json()["url"])
+        create_session_data = create_session_response.json()
+        session_id = create_session_data["session_id"]
+        print_immediately("Devin URL:", create_session_data["url"])
 
-        yielded_message_count = 0
+        poll_state: dict = {"cursor": None}
 
-        devin_messages = []
+        devin_messages: list[str] = []
         while True:
             try:
-                session_detail = self._get_session_detail(headers, session_id)
+                session_detail = self._get_session(headers, org_id, session_id)
             except (httpx.RequestError, httpx.HTTPStatusError):
                 pass
             else:
-                # Yield new messages incrementally
-                messages = session_detail["messages"]
-                for i in range(yielded_message_count, len(messages)):
-                    message = messages[i]
-                    if message["type"] == "devin_message":
-                        devin_message = message["message"]
-                        if len(devin_messages) == 0:
-                            yield devin_message
-                        else:
-                            yield "\n" + devin_message
-                        devin_messages.append(devin_message)
-                yielded_message_count = len(messages)
+                try:
+                    yield from self._drain_messages(
+                        headers, org_id, session_id,
+                        devin_messages, poll_state,
+                    )
+                except (httpx.RequestError, httpx.HTTPStatusError):
+                    pass
 
-                if session_detail["status_enum"] in {"blocked", "stopped", "finished"}:
+                status = session_detail["status"]
+                status_detail = session_detail.get("status_detail")
+                if status in {"exit", "error", "suspended"}:
+                    break
+                if status == "running" and status_detail in {
+                    "finished",
+                    "waiting_for_user",
+                    "waiting_for_approval",
+                }:
                     break
             time.sleep(5)
 
-    def _get_session_detail(self, headers, session_id):
-        timeout = httpx.Timeout(5.0, read=10.0)
-        session_detail = httpx.get(
-            f"https://api.devin.ai/v1/session/{session_id}",
+    def _get_session(self, headers, org_id, session_id):
+        session_response = httpx.get(
+            f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}",
             headers=headers,
-            timeout=timeout,
+            timeout=TIMEOUT,
         )
-        session_detail.raise_for_status()
-        session_detail_json = session_detail.json()
-        logger.debug("Session detail: %s", session_detail_json)
-        return session_detail_json
+        session_response.raise_for_status()
+        session_json = session_response.json()
+        logger.debug("Session detail: %s", session_json)
+        return session_json
+
+    def _drain_messages(
+        self, headers, org_id, session_id, devin_messages, poll_state
+    ):
+        cursor = poll_state["cursor"]
+        while True:
+            params = {}
+            if cursor is not None:
+                params["after"] = cursor
+            messages_response = httpx.get(
+                f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
+                headers=headers,
+                params=params,
+                timeout=TIMEOUT,
+            )
+            messages_response.raise_for_status()
+            data = messages_response.json()
+            for item in data["items"]:
+                if item["source"] == "devin":
+                    devin_message = item["message"]
+                    if len(devin_messages) == 0:
+                        yield devin_message
+                    else:
+                        yield "\n" + devin_message
+                    devin_messages.append(devin_message)
+            has_next_page = data.get("has_next_page")
+            new_cursor = data.get("end_cursor")
+            if has_next_page:
+                if new_cursor is None:
+                    raise llm.ModelError(
+                        "messages pagination indicated another page"
+                        " without an end_cursor"
+                    )
+                cursor = new_cursor
+                poll_state["cursor"] = cursor
+                continue
+
+            if new_cursor is not None:
+                cursor = new_cursor
+                poll_state["cursor"] = cursor
+            break
 
 
 class DeepWikiClient:
