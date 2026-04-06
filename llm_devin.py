@@ -140,7 +140,7 @@ class DevinModel(llm.KeyModel):
             new_cursor = data.get("end_cursor")
             if has_next_page:
                 if new_cursor is None:
-                    raise ValueError(
+                    raise llm.ModelError(
                         "messages pagination indicated another page"
                         " without an end_cursor"
                     )
