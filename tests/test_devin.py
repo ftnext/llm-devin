@@ -168,6 +168,89 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
     assert actual == ["Done!"]
 
 
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        json__eq={"prompt": "Do something"},
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "session_id": "devin-test-session",
+                "url": "https://app.devin.ai/sessions/devin-test-session",
+                "status": "running",
+            },
+        )
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "exit",
+                "status_detail": None,
+            },
+        )
+    )
+    page1 = httpx.Response(
+        status_code=200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "devin",
+                    "message": "Page 1 message",
+                    "created_at": 1000,
+                },
+            ],
+            "end_cursor": "cursor-after-page1",
+            "has_next_page": True,
+        },
+    )
+    page2 = httpx.Response(
+        status_code=200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-2",
+                    "source": "devin",
+                    "message": "Page 2 message",
+                    "created_at": 1001,
+                },
+            ],
+            "end_cursor": "cursor-after-page2",
+            "has_next_page": False,
+        },
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+    ).mock(side_effect=[page1, page2])
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Do something"
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+            key="test-api-key",
+        )
+    )
+
+    assert actual == ["Page 1 message", "\nPage 2 message"]
+
+
 def test_execute_requires_org_id(monkeypatch):
     monkeypatch.delenv("LLM_DEVIN_ORG_ID", raising=False)
 

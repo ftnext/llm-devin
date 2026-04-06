@@ -68,8 +68,9 @@ class DevinModel(llm.KeyModel):
         )
         create_session_response.raise_for_status()
 
-        session_id = create_session_response.json()["session_id"]
-        print_immediately("Devin URL:", create_session_response.json()["url"])
+        create_session_data = create_session_response.json()
+        session_id = create_session_data["session_id"]
+        print_immediately("Devin URL:", create_session_data["url"])
 
         poll_state: dict = {"cursor": None}
 
@@ -135,12 +136,22 @@ class DevinModel(llm.KeyModel):
                     else:
                         yield "\n" + devin_message
                     devin_messages.append(devin_message)
+            has_next_page = data.get("has_next_page")
             new_cursor = data.get("end_cursor")
+            if has_next_page:
+                if new_cursor is None:
+                    raise ValueError(
+                        "messages pagination indicated another page"
+                        " without an end_cursor"
+                    )
+                cursor = new_cursor
+                poll_state["cursor"] = cursor
+                continue
+
             if new_cursor is not None:
                 cursor = new_cursor
                 poll_state["cursor"] = cursor
-            if not data.get("has_next_page"):
-                break
+            break
 
 
 class DeepWikiClient:
