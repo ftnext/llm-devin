@@ -25,6 +25,7 @@ dependencies = [
     "llm",
     "httpx",
     "happy-python-logging",
+    "python-json-logger",
     "mcp",
 ]
 

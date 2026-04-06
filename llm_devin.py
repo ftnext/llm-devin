@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import llm
+from pythonjsonlogger.json import JsonFormatter
 # from happy_python_logging.app import configureLogger
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
@@ -55,7 +56,37 @@ class DevinModel(llm.KeyModel):
             )
         return org_id
 
+    def _setup_debug_logging(self) -> logging.FileHandler | None:
+        if not logger.isEnabledFor(logging.DEBUG):
+            return None
+        log_dir = llm.user_dir() / "devin"
+        log_dir.mkdir(exist_ok=True)
+        timestamp = time.strftime("%Y-%m-%d-%H-%M-%S")
+        log_file = log_dir / f"{timestamp}.jsonl"
+        handler = logging.FileHandler(log_file)
+        handler.setFormatter(JsonFormatter(timestamp=True))
+        handler.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        print_immediately(f"Debug log: {log_file}")
+        return handler
+
+    def _teardown_debug_logging(
+        self, handler: logging.FileHandler | None
+    ) -> None:
+        if handler is not None:
+            logger.removeHandler(handler)
+            handler.close()
+
     def execute(self, prompt, stream, response, conversation, key):
+        handler = self._setup_debug_logging()
+        try:
+            yield from self._execute(
+                prompt, stream, response, conversation, key
+            )
+        finally:
+            self._teardown_debug_logging(handler)
+
+    def _execute(self, prompt, stream, response, conversation, key):
         org_id = self._org_id()
         headers = {"Authorization": f"Bearer {key}"}
         request_json = {"prompt": prompt.prompt}
@@ -69,6 +100,10 @@ class DevinModel(llm.KeyModel):
         create_session_response.raise_for_status()
 
         create_session_data = create_session_response.json()
+        logger.debug(
+            "create_session response",
+            extra={"data": create_session_data},
+        )
         session_id = create_session_data["session_id"]
         print_immediately("Devin URL:", create_session_data["url"])
 
@@ -109,7 +144,10 @@ class DevinModel(llm.KeyModel):
         )
         session_response.raise_for_status()
         session_json = session_response.json()
-        logger.debug("Session detail: %s", session_json)
+        logger.debug(
+            "get_session response",
+            extra={"data": session_json},
+        )
         return session_json
 
     def _drain_messages(
@@ -128,6 +166,10 @@ class DevinModel(llm.KeyModel):
             )
             messages_response.raise_for_status()
             data = messages_response.json()
+            logger.debug(
+                "messages response",
+                extra={"data": data},
+            )
             for item in data["items"]:
                 if item["source"] == "devin":
                     devin_message = item["message"]
