@@ -135,8 +135,10 @@ class DevinModel(llm.KeyModel):
                     else:
                         yield "\n" + devin_message
                     devin_messages.append(devin_message)
-            cursor = data.get("end_cursor")
-            poll_state["cursor"] = cursor
+            new_cursor = data.get("end_cursor")
+            if new_cursor is not None:
+                cursor = new_cursor
+                poll_state["cursor"] = cursor
             if not data.get("has_next_page"):
                 break
 

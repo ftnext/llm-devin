@@ -105,6 +105,8 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
 
     respx_mock.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        json__eq={"prompt": "Fix the bug"},
     ).mock(
         return_value=httpx.Response(
             status_code=200,
@@ -117,6 +119,7 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
     )
     respx_mock.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
         return_value=httpx.Response(
             status_code=200,
@@ -129,6 +132,7 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
     )
     respx_mock.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
         return_value=httpx.Response(
             status_code=200,
