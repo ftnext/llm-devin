@@ -71,7 +71,7 @@ class DevinModel(llm.KeyModel):
         session_id = create_session_response.json()["session_id"]
         print_immediately("Devin URL:", create_session_response.json()["url"])
 
-        messages_cursor: str | None = None
+        poll_state: dict = {"cursor": None}
 
         devin_messages: list[str] = []
         while True:
@@ -81,21 +81,12 @@ class DevinModel(llm.KeyModel):
                 pass
             else:
                 try:
-                    messages_response = self._get_messages(
-                        headers, org_id, session_id, after=messages_cursor
+                    yield from self._drain_messages(
+                        headers, org_id, session_id,
+                        devin_messages, poll_state,
                     )
                 except (httpx.RequestError, httpx.HTTPStatusError):
                     pass
-                else:
-                    for item in messages_response["items"]:
-                        if item["source"] == "devin":
-                            devin_message = item["message"]
-                            if len(devin_messages) == 0:
-                                yield devin_message
-                            else:
-                                yield "\n" + devin_message
-                            devin_messages.append(devin_message)
-                    messages_cursor = messages_response.get("end_cursor")
 
                 status = session_detail["status"]
                 status_detail = session_detail.get("status_detail")
@@ -104,6 +95,7 @@ class DevinModel(llm.KeyModel):
                 if status == "running" and status_detail in {
                     "finished",
                     "waiting_for_user",
+                    "waiting_for_approval",
                 }:
                     break
             time.sleep(5)
@@ -119,18 +111,34 @@ class DevinModel(llm.KeyModel):
         logger.debug("Session detail: %s", session_json)
         return session_json
 
-    def _get_messages(self, headers, org_id, session_id, *, after=None):
-        params = {}
-        if after is not None:
-            params["after"] = after
-        messages_response = httpx.get(
-            f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
-            headers=headers,
-            params=params,
-            timeout=TIMEOUT,
-        )
-        messages_response.raise_for_status()
-        return messages_response.json()
+    def _drain_messages(
+        self, headers, org_id, session_id, devin_messages, poll_state
+    ):
+        cursor = poll_state["cursor"]
+        while True:
+            params = {}
+            if cursor is not None:
+                params["after"] = cursor
+            messages_response = httpx.get(
+                f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
+                headers=headers,
+                params=params,
+                timeout=TIMEOUT,
+            )
+            messages_response.raise_for_status()
+            data = messages_response.json()
+            for item in data["items"]:
+                if item["source"] == "devin":
+                    devin_message = item["message"]
+                    if len(devin_messages) == 0:
+                        yield devin_message
+                    else:
+                        yield "\n" + devin_message
+                    devin_messages.append(devin_message)
+            cursor = data.get("end_cursor")
+            poll_state["cursor"] = cursor
+            if not data.get("has_next_page"):
+                break
 
 
 class DeepWikiClient:

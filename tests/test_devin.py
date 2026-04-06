@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import httpx
+import llm
 import pytest
 import respx
 from llm.plugins import load_plugins, pm
@@ -170,7 +171,7 @@ def test_execute_requires_org_id(monkeypatch):
     prompt = MagicMock()
     prompt.prompt = "Hello"
 
-    with pytest.raises(Exception, match="LLM_DEVIN_ORG_ID"):
+    with pytest.raises(llm.ModelError, match="LLM_DEVIN_ORG_ID"):
         list(
             sut.execute(
                 prompt,
