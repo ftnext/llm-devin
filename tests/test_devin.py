@@ -83,6 +83,7 @@ def test_execute_flow(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello. How are you?"
+    prompt.options.debug = False
 
     actual = list(
         sut.execute(
@@ -156,6 +157,7 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Fix the bug"
+    prompt.options.debug = False
 
     actual = list(
         sut.execute(
@@ -239,6 +241,7 @@ def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Do something"
+    prompt.options.debug = False
 
     actual = list(
         sut.execute(
@@ -259,6 +262,7 @@ def test_execute_requires_org_id(monkeypatch):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello"
+    prompt.options.debug = False
 
     with pytest.raises(llm.ModelError, match="LLM_DEVIN_ORG_ID"):
         list(
