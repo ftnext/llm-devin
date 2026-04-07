@@ -86,7 +86,7 @@ class DevinModel(llm.KeyModel):
             logger.setLevel(logging.NOTSET)
 
     def execute(self, prompt, stream, response, conversation, key):
-        debug = prompt.options.debug is True
+        debug = prompt.options.debug or False
         handler = self._setup_debug_logging(debug)
         try:
             yield from self._execute(
