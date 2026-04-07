@@ -453,3 +453,73 @@ def test_no_debug_logging_when_debug_option_is_false(
 
     log_dir = tmp_path / "devin"
     assert not log_dir.exists()
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
+
+    japanese_message = "これはテストです"
+    messages_data = {
+        "items": [
+            {
+                "event_id": "evt-1",
+                "source": "devin",
+                "message": japanese_message,
+                "created_at": 1000,
+            },
+        ],
+        "end_cursor": None,
+        "has_next_page": False,
+    }
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "url": "https://app.devin.ai/sessions/devin-test-session",
+                "status": "running",
+            },
+        )
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "running",
+                "status_detail": "finished",
+            },
+        )
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+    ).mock(return_value=httpx.Response(200, json=messages_data))
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello"
+    prompt.options.debug = True
+
+    list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+            key="test-api-key",
+        )
+    )
+
+    log_dir = tmp_path / "devin"
+    jsonl_files = list(log_dir.glob("*.jsonl"))
+    assert len(jsonl_files) == 1
+
+    raw_content = jsonl_files[0].read_text(encoding="utf-8")
+    assert japanese_message in raw_content
+    assert "\\u" not in raw_content
