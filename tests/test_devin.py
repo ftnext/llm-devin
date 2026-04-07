@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock, patch
 
 import httpx
+import json
+
 import llm
 import pytest
 import respx
@@ -297,3 +299,157 @@ def test_deepwiki_execute(client_run):
 
     assert len(actual) == 1
     assert actual[0] == "DeepWiki markdown for repository ftnext/llm-devin"
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
+
+    create_session_data = {
+        "session_id": "devin-test-session",
+        "url": "https://app.devin.ai/sessions/devin-test-session",
+        "status": "running",
+    }
+    session_detail_data = {
+        "session_id": "devin-test-session",
+        "status": "running",
+        "status_detail": "finished",
+    }
+    messages_data = {
+        "items": [
+            {
+                "event_id": "evt-1",
+                "source": "devin",
+                "message": "Done!",
+                "created_at": 1000,
+            },
+        ],
+        "end_cursor": None,
+        "has_next_page": False,
+    }
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+    ).mock(return_value=httpx.Response(200, json=create_session_data))
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+    ).mock(return_value=httpx.Response(200, json=session_detail_data))
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+    ).mock(return_value=httpx.Response(200, json=messages_data))
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello"
+    prompt.options.debug = True
+
+    list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+            key="test-api-key",
+        )
+    )
+
+    log_dir = tmp_path / "devin"
+    assert log_dir.exists()
+    jsonl_files = list(log_dir.glob("*.jsonl"))
+    assert len(jsonl_files) == 1
+
+    lines = jsonl_files[0].read_text().strip().splitlines()
+    records = [json.loads(line) for line in lines]
+
+    messages = [r["message"] for r in records]
+    assert "create_session response" in messages
+    assert "get_session response" in messages
+    assert "messages response" in messages
+
+    create_record = next(
+        r for r in records if r["message"] == "create_session response"
+    )
+    assert create_record["data"] == create_session_data
+
+    session_record = next(
+        r for r in records if r["message"] == "get_session response"
+    )
+    assert session_record["data"] == session_detail_data
+
+    messages_record = next(
+        r for r in records if r["message"] == "messages response"
+    )
+    assert messages_record["data"] == messages_data
+
+    for record in records:
+        assert "timestamp" in record
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_no_debug_logging_when_debug_option_is_false(
+    monkeypatch, respx_mock, tmp_path
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
+
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "url": "https://app.devin.ai/sessions/devin-test-session",
+                "status": "running",
+            },
+        )
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "exit",
+                "status_detail": None,
+            },
+        )
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "event_id": "evt-1",
+                        "source": "devin",
+                        "message": "Done!",
+                        "created_at": 1000,
+                    },
+                ],
+                "end_cursor": None,
+                "has_next_page": False,
+            },
+        )
+    )
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello"
+    prompt.options.debug = False
+
+    list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+            key="test-api-key",
+        )
+    )
+
+    log_dir = tmp_path / "devin"
+    assert not log_dir.exists()
