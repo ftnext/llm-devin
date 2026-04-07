@@ -523,3 +523,105 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
     raw_content = jsonl_files[0].read_text(encoding="utf-8")
     assert japanese_message in raw_content
     assert "\\u" not in raw_content
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        json__eq={"prompt": "Do work"},
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "session_id": "devin-test-session",
+                "url": "https://app.devin.ai/sessions/devin-test-session",
+                "status": "running",
+            },
+        )
+    )
+
+    session_responses = [
+        httpx.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "running",
+                "status_detail": "working",
+            },
+        ),
+        httpx.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "running",
+                "status_detail": "finished",
+            },
+        ),
+    ]
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+    ).mock(side_effect=session_responses)
+
+    messages_poll1 = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "devin",
+                    "message": "Working on it",
+                    "created_at": 1000,
+                },
+            ],
+            "end_cursor": None,
+            "has_next_page": False,
+        },
+    )
+    messages_poll2 = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "devin",
+                    "message": "Working on it",
+                    "created_at": 1000,
+                },
+                {
+                    "event_id": "evt-2",
+                    "source": "devin",
+                    "message": "All done",
+                    "created_at": 1001,
+                },
+            ],
+            "end_cursor": None,
+            "has_next_page": False,
+        },
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+    ).mock(side_effect=[messages_poll1, messages_poll2])
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Do work"
+    prompt.options.debug = False
+
+    with patch("llm_devin.time.sleep"):
+        actual = list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=MagicMock(),
+                key="test-api-key",
+            )
+        )
+
+    assert actual == ["Working on it", "\nAll done"]
