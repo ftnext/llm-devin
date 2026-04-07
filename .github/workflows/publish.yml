@@ -19,7 +19,7 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
-      run: uv sync --extra test
+      run: uv sync --locked --extra test
     - name: Run tests
       run: uv run pytest
   deploy:
@@ -27,6 +27,7 @@ jobs:
     needs: [test]
     environment: release
     permissions:
+      contents: read
       id-token: write
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
