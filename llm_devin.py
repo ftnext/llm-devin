@@ -119,6 +119,7 @@ class DevinModel(llm.KeyModel):
         print_immediately("Devin URL:", create_session_data["url"])
 
         poll_state: dict = {"cursor": None}
+        seen_event_ids: set[str] = set()
 
         devin_messages: list[str] = []
         while True:
@@ -131,6 +132,7 @@ class DevinModel(llm.KeyModel):
                     yield from self._drain_messages(
                         headers, org_id, session_id,
                         devin_messages, poll_state,
+                        seen_event_ids,
                     )
                 except (httpx.RequestError, httpx.HTTPStatusError):
                     pass
@@ -162,7 +164,8 @@ class DevinModel(llm.KeyModel):
         return session_json
 
     def _drain_messages(
-        self, headers, org_id, session_id, devin_messages, poll_state
+        self, headers, org_id, session_id, devin_messages, poll_state,
+        seen_event_ids,
     ):
         cursor = poll_state["cursor"]
         while True:
@@ -182,6 +185,9 @@ class DevinModel(llm.KeyModel):
                 extra={"data": data},
             )
             for item in data["items"]:
+                if item["event_id"] in seen_event_ids:
+                    continue
+                seen_event_ids.add(item["event_id"])
                 if item["source"] == "devin":
                     devin_message = item["message"]
                     if len(devin_messages) == 0:
