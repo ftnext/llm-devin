@@ -70,7 +70,9 @@ class DevinModel(llm.KeyModel):
         timestamp = time.strftime("%Y-%m-%d-%H-%M-%S")
         log_file = log_dir / f"{timestamp}.jsonl"
         handler = logging.FileHandler(log_file)
-        handler.setFormatter(JsonFormatter(timestamp=True))
+        handler.setFormatter(
+            JsonFormatter(timestamp=True, json_ensure_ascii=False)
+        )
         handler.setLevel(logging.DEBUG)
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
