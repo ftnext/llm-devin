@@ -54,5 +54,5 @@ This plugin uses the **Devin API v3** (Organization scope).
 
 ## CI
 
-- GitHub Actions: `.github/workflows/test.yml` runs `pytest` on Python 3.10–3.13.
+- GitHub Actions: `.github/workflows/test.yml` runs `pytest` on Python 3.10–3.14.
 - Publishing: `.github/workflows/publish.yml` builds and publishes to PyPI on GitHub release.
