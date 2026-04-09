@@ -276,7 +276,7 @@ def test_execute_requires_org_id(monkeypatch):
         )
 
 
-@patch("llm_devin.DeepWikiClient.run")
+@patch("llm_devin._deepwiki.DeepWikiClient.run")
 def test_deepwiki_execute(client_run):
     client_run.return_value = CallToolResult(
         isError=False,
@@ -617,7 +617,7 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
     prompt.prompt = "Do work"
     prompt.options.debug = False
 
-    with patch("llm_devin.time.sleep"):
+    with patch("llm_devin._devin.time.sleep"):
         actual = list(
             sut.execute(
                 prompt,
