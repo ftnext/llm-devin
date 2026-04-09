@@ -29,6 +29,18 @@ export LLM_DEVIN_ORG_ID=your_org_id_here
 llm -m devin "Hello, Devin"
 ```
 
+Continue a conversation with `llm -c`:
+
+```bash
+llm -c "Follow-up message"
+```
+
+Start an interactive chat session:
+
+```bash
+llm chat -m devin
+```
+
 ### DeepWiki
 
 ```bash
