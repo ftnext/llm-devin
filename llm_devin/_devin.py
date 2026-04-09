@@ -99,11 +99,24 @@ class DevinModel(llm.KeyModel):
 
         previous_session_id = self._get_previous_session_id(conversation)
 
+        seen_event_ids: set[str] = set()
+
         if previous_session_id is not None:
             session_id = previous_session_id
             logger.debug(
                 "Continuing session %s", session_id,
             )
+
+            prev_cursor = None
+            prev_response_json = conversation.responses[-1].response_json
+            if isinstance(prev_response_json, dict):
+                prev_cursor = prev_response_json.get("end_cursor")
+            poll_state: dict = {"cursor": prev_cursor}
+
+            self._collect_existing_event_ids(
+                headers, org_id, session_id, poll_state, seen_event_ids,
+            )
+
             try:
                 send_message_response = httpx.post(
                     f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
@@ -119,12 +132,6 @@ class DevinModel(llm.KeyModel):
                         "Please start a new conversation."
                     ) from ex
                 raise
-
-            prev_cursor = None
-            prev_response_json = conversation.responses[-1].response_json
-            if isinstance(prev_response_json, dict):
-                prev_cursor = prev_response_json.get("end_cursor")
-            poll_state: dict = {"cursor": prev_cursor}
         else:
             request_json = {"prompt": prompt.prompt}
             logger.debug("Request JSON: %s", request_json)
@@ -144,13 +151,6 @@ class DevinModel(llm.KeyModel):
             session_id = create_session_data["session_id"]
             print_immediately("Devin URL:", create_session_data["url"])
             poll_state = {"cursor": None}
-
-        seen_event_ids: set[str] = set()
-
-        if previous_session_id is not None:
-            self._collect_existing_event_ids(
-                headers, org_id, session_id, poll_state, seen_event_ids,
-            )
 
         devin_messages: list[str] = []
         while True:
@@ -211,7 +211,10 @@ class DevinModel(llm.KeyModel):
             new_cursor = data.get("end_cursor")
             if has_next_page:
                 if new_cursor is None:
-                    break
+                    raise llm.ModelError(
+                        "messages pagination indicated another page"
+                        " without an end_cursor"
+                    )
                 cursor = new_cursor
                 continue
             if new_cursor is not None:

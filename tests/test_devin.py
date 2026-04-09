@@ -918,6 +918,20 @@ def test_continue_conversation_invalid_session_raises_model_error(
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-deleted-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        params__contains={"after": "cursor-old"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [],
+                "end_cursor": "cursor-old",
+                "has_next_page": False,
+            },
+        )
+    )
     respx_mock.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-deleted-session/messages",
         headers__contains={"Authorization": "Bearer test-api-key"},
@@ -960,6 +974,20 @@ def test_continue_conversation_server_error_is_reraised(
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        params__contains={"after": "cursor-old"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [],
+                "end_cursor": "cursor-old",
+                "has_next_page": False,
+            },
+        )
+    )
     respx_mock.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
         headers__contains={"Authorization": "Bearer test-api-key"},
