@@ -29,10 +29,10 @@ export LLM_DEVIN_ORG_ID=your_org_id_here
 llm -m devin "Hello, Devin"
 ```
 
-Continue a conversation with `llm -c`:
+Continue that Devin conversation with `llm -c` immediately after the previous command, or specify the model explicitly:
 
 ```bash
-llm -c "Follow-up message"
+llm -m devin -c "Follow-up message"
 ```
 
 Start an interactive chat session:
