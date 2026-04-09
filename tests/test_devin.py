@@ -900,3 +900,42 @@ def test_continue_conversation_invalid_session_raises_model_error(
                 key="test-api-key",
             )
         )
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_continue_conversation_server_error_is_reraised(
+    monkeypatch, respx_mock
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        json__eq={"message": "Follow up"},
+    ).mock(
+        return_value=httpx.Response(500, json={"error": "internal server error"})
+    )
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options.debug = False
+
+    prev_response = MagicMock()
+    prev_response.response_json = {
+        "session_id": "devin-test-session",
+        "end_cursor": "cursor-old",
+    }
+    conversation = MagicMock()
+    conversation.responses = [prev_response]
+
+    with pytest.raises(httpx.HTTPStatusError):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=conversation,
+                key="test-api-key",
+            )
+        )

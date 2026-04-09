@@ -113,10 +113,12 @@ class DevinModel(llm.KeyModel):
                 )
                 send_message_response.raise_for_status()
             except httpx.HTTPStatusError as ex:
-                raise llm.ModelError(
-                    "The previous Devin session is invalid or expired. "
-                    "Please start a new conversation."
-                ) from ex
+                if ex.response.status_code in {404, 410}:
+                    raise llm.ModelError(
+                        "The previous Devin session is invalid or expired. "
+                        "Please start a new conversation."
+                    ) from ex
+                raise
 
             prev_cursor = None
             prev_response_json = conversation.responses[-1].response_json
