@@ -82,28 +82,69 @@ class DevinModel(llm.KeyModel):
         finally:
             self._teardown_debug_logging(handler)
 
+    def _get_previous_session_id(self, conversation):
+        if conversation is None:
+            return None
+        responses = getattr(conversation, "responses", None)
+        if not responses:
+            return None
+        prev_response_json = responses[-1].response_json
+        if not isinstance(prev_response_json, dict):
+            return None
+        return prev_response_json.get("session_id")
+
     def _execute(self, prompt, stream, response, conversation, key):
         org_id = self._org_id()
         headers = {"Authorization": f"Bearer {key}"}
-        request_json = {"prompt": prompt.prompt}
-        logger.debug("Request JSON: %s", request_json)
-        create_session_response = httpx.post(
-            f"{self.BASE_URL}/organizations/{org_id}/sessions",
-            headers=headers,
-            json=request_json,
-            timeout=TIMEOUT,
-        )
-        create_session_response.raise_for_status()
 
-        create_session_data = create_session_response.json()
-        logger.debug(
-            "create_session response",
-            extra={"data": create_session_data},
-        )
-        session_id = create_session_data["session_id"]
-        print_immediately("Devin URL:", create_session_data["url"])
+        previous_session_id = self._get_previous_session_id(conversation)
 
-        poll_state: dict = {"cursor": None}
+        if previous_session_id is not None:
+            session_id = previous_session_id
+            logger.debug(
+                "Continuing session %s", session_id,
+            )
+            try:
+                send_message_response = httpx.post(
+                    f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
+                    headers=headers,
+                    json={"message": prompt.prompt},
+                    timeout=TIMEOUT,
+                )
+                send_message_response.raise_for_status()
+            except httpx.HTTPStatusError as ex:
+                if ex.response.status_code in {404, 410}:
+                    raise llm.ModelError(
+                        "The previous Devin session is invalid or expired. "
+                        "Please start a new conversation."
+                    ) from ex
+                raise
+
+            prev_cursor = None
+            prev_response_json = conversation.responses[-1].response_json
+            if isinstance(prev_response_json, dict):
+                prev_cursor = prev_response_json.get("end_cursor")
+            poll_state: dict = {"cursor": prev_cursor}
+        else:
+            request_json = {"prompt": prompt.prompt}
+            logger.debug("Request JSON: %s", request_json)
+            create_session_response = httpx.post(
+                f"{self.BASE_URL}/organizations/{org_id}/sessions",
+                headers=headers,
+                json=request_json,
+                timeout=TIMEOUT,
+            )
+            create_session_response.raise_for_status()
+
+            create_session_data = create_session_response.json()
+            logger.debug(
+                "create_session response",
+                extra={"data": create_session_data},
+            )
+            session_id = create_session_data["session_id"]
+            print_immediately("Devin URL:", create_session_data["url"])
+            poll_state = {"cursor": None}
+
         seen_event_ids: set[str] = set()
 
         devin_messages: list[str] = []
@@ -133,6 +174,11 @@ class DevinModel(llm.KeyModel):
                 }:
                     break
             time.sleep(5)
+
+        response.response_json = {
+            "session_id": session_id,
+            "end_cursor": poll_state["cursor"],
+        }
 
     def _get_session(self, headers, org_id, session_id):
         session_response = httpx.get(
