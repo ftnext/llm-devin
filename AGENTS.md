@@ -7,7 +7,7 @@
 - **`devin`**: Interacts with the [Devin API (v3)](https://docs.devin.ai/api-reference/overview) to create sessions and stream messages.
 - **`deepwiki`**: Queries repositories via the [DeepWiki MCP server](https://mcp.deepwiki.com).
 
-Single-file plugin: all logic lives in `llm_devin.py`.
+Package structure: `llm_devin/` with `_devin.py` (Devin API model), `_deepwiki.py` (DeepWiki MCP model), and `__init__.py` (plugin registration + re-exports).
 
 ## Setup
 
@@ -27,7 +27,7 @@ Tests use [respx](https://lundberg.github.io/respx/) to mock HTTP calls and `mon
 
 - Python 3.10+
 - Minimal comments; if needed, write them in English.
-- Keep `llm_devin.py` as a single module (no subpackages).
+- `llm_devin` is a package. Devin API logic lives in `_devin.py`, DeepWiki logic in `_deepwiki.py`. Public symbols are re-exported from `__init__.py`.
 
 ## Devin API
 
