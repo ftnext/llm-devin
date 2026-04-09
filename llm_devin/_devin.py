@@ -104,13 +104,19 @@ class DevinModel(llm.KeyModel):
             logger.debug(
                 "Continuing session %s", session_id,
             )
-            send_message_response = httpx.post(
-                f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
-                headers=headers,
-                json={"message": prompt.prompt},
-                timeout=TIMEOUT,
-            )
-            send_message_response.raise_for_status()
+            try:
+                send_message_response = httpx.post(
+                    f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
+                    headers=headers,
+                    json={"message": prompt.prompt},
+                    timeout=TIMEOUT,
+                )
+                send_message_response.raise_for_status()
+            except httpx.HTTPStatusError as ex:
+                raise llm.ModelError(
+                    "The previous Devin session is invalid or expired. "
+                    "Please start a new conversation."
+                ) from ex
 
             prev_cursor = None
             prev_response_json = conversation.responses[-1].response_json
