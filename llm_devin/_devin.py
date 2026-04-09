@@ -4,15 +4,13 @@ import logging
 import os
 import sys
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import httpx
 import llm
 from pydantic import Field
 from pythonjsonlogger.json import JsonFormatter
 
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,9 @@ __all__ = ["DeepWikiClient", "DeepWikiModel", "DevinModel"]
 
 # Suppress "Unknown SSE event: ping" from DeepWiki MCP server.
 # ref: https://github.com/modelcontextprotocol/python-sdk/blob/v1.9.2/src/mcp/client/sse.py#L113-L116
-logging.getLogger("mcp.client.sse").addHandler(logging.NullHandler())
+_mcp_sse_logger = logging.getLogger("mcp.client.sse")
+_mcp_sse_logger.addHandler(logging.NullHandler())
+_mcp_sse_logger.propagate = False
 
 
 @llm.hookimpl
