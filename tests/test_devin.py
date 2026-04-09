@@ -729,26 +729,58 @@ def test_continue_conversation(monkeypatch, respx_mock):
             },
         )
     )
+    prefetch_response = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "user",
+                    "message": "Hello",
+                    "created_at": 1000,
+                },
+                {
+                    "event_id": "evt-2",
+                    "source": "devin",
+                    "message": "Previous answer",
+                    "created_at": 1001,
+                },
+            ],
+            "end_cursor": "cursor-1",
+            "has_next_page": False,
+        },
+    )
+    poll_response = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "user",
+                    "message": "Hello",
+                    "created_at": 1000,
+                },
+                {
+                    "event_id": "evt-2",
+                    "source": "devin",
+                    "message": "Previous answer",
+                    "created_at": 1001,
+                },
+                {
+                    "event_id": "evt-3",
+                    "source": "devin",
+                    "message": "Here is the follow-up answer.",
+                    "created_at": 2000,
+                },
+            ],
+            "end_cursor": "cursor-2",
+            "has_next_page": False,
+        },
+    )
     respx_mock.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
         headers__contains={"Authorization": "Bearer test-api-key"},
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "items": [
-                    {
-                        "event_id": "evt-3",
-                        "source": "devin",
-                        "message": "Here is the follow-up answer.",
-                        "created_at": 2000,
-                    },
-                ],
-                "end_cursor": "cursor-2",
-                "has_next_page": False,
-            },
-        )
-    )
+    ).mock(side_effect=[prefetch_response, poll_response])
 
     sut = DevinModel()
     prompt = MagicMock()
@@ -806,27 +838,47 @@ def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
             },
         )
     )
+    prefetch_response = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-4",
+                    "source": "devin",
+                    "message": "Old message",
+                    "created_at": 2500,
+                },
+            ],
+            "end_cursor": "cursor-prev",
+            "has_next_page": False,
+        },
+    )
+    poll_response = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-4",
+                    "source": "devin",
+                    "message": "Old message",
+                    "created_at": 2500,
+                },
+                {
+                    "event_id": "evt-5",
+                    "source": "devin",
+                    "message": "Response after cursor",
+                    "created_at": 3000,
+                },
+            ],
+            "end_cursor": "cursor-new",
+            "has_next_page": False,
+        },
+    )
     respx_mock.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
         headers__contains={"Authorization": "Bearer test-api-key"},
         params__contains={"after": "cursor-prev"},
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "items": [
-                    {
-                        "event_id": "evt-5",
-                        "source": "devin",
-                        "message": "Response after cursor",
-                        "created_at": 3000,
-                    },
-                ],
-                "end_cursor": "cursor-new",
-                "has_next_page": False,
-            },
-        )
-    )
+    ).mock(side_effect=[prefetch_response, poll_response])
 
     sut = DevinModel()
     prompt = MagicMock()
@@ -939,3 +991,116 @@ def test_continue_conversation_server_error_is_reraised(
                 key="test-api-key",
             )
         )
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_continue_conversation_null_end_cursor_skips_old_messages(
+    monkeypatch, respx_mock
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        json__eq={"message": "Follow up"},
+    ).mock(
+        return_value=httpx.Response(200, json={})
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "running",
+                "status_detail": "finished",
+            },
+        )
+    )
+    prefetch_response = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "user",
+                    "message": "Hello",
+                    "created_at": 1000,
+                },
+                {
+                    "event_id": "evt-2",
+                    "source": "devin",
+                    "message": "Previous answer that should NOT appear again",
+                    "created_at": 1001,
+                },
+            ],
+            "end_cursor": None,
+            "has_next_page": False,
+        },
+    )
+    poll_response = httpx.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "user",
+                    "message": "Hello",
+                    "created_at": 1000,
+                },
+                {
+                    "event_id": "evt-2",
+                    "source": "devin",
+                    "message": "Previous answer that should NOT appear again",
+                    "created_at": 1001,
+                },
+                {
+                    "event_id": "evt-3",
+                    "source": "user",
+                    "message": "Follow up",
+                    "created_at": 2000,
+                },
+                {
+                    "event_id": "evt-4",
+                    "source": "devin",
+                    "message": "New follow-up answer",
+                    "created_at": 2001,
+                },
+            ],
+            "end_cursor": None,
+            "has_next_page": False,
+        },
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+    ).mock(side_effect=[prefetch_response, poll_response])
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options.debug = False
+
+    prev_response = MagicMock()
+    prev_response.response_json = {
+        "session_id": "devin-test-session",
+        "end_cursor": None,
+    }
+    conversation = MagicMock()
+    conversation.responses = [prev_response]
+
+    response = MagicMock()
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=response,
+            conversation=conversation,
+            key="test-api-key",
+        )
+    )
+
+    assert actual == ["New follow-up answer"]

@@ -147,6 +147,11 @@ class DevinModel(llm.KeyModel):
 
         seen_event_ids: set[str] = set()
 
+        if previous_session_id is not None:
+            self._collect_existing_event_ids(
+                headers, org_id, session_id, poll_state, seen_event_ids,
+            )
+
         devin_messages: list[str] = []
         while True:
             try:
@@ -179,6 +184,40 @@ class DevinModel(llm.KeyModel):
             "session_id": session_id,
             "end_cursor": poll_state["cursor"],
         }
+
+    def _collect_existing_event_ids(
+        self, headers, org_id, session_id, poll_state, seen_event_ids,
+    ):
+        cursor = poll_state["cursor"]
+        while True:
+            params = {}
+            if cursor is not None:
+                params["after"] = cursor
+            messages_response = httpx.get(
+                f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
+                headers=headers,
+                params=params,
+                timeout=TIMEOUT,
+            )
+            messages_response.raise_for_status()
+            data = messages_response.json()
+            logger.debug(
+                "collect existing messages response",
+                extra={"data": data},
+            )
+            for item in data["items"]:
+                seen_event_ids.add(item["event_id"])
+            has_next_page = data.get("has_next_page")
+            new_cursor = data.get("end_cursor")
+            if has_next_page:
+                if new_cursor is None:
+                    break
+                cursor = new_cursor
+                continue
+            if new_cursor is not None:
+                cursor = new_cursor
+                poll_state["cursor"] = cursor
+            break
 
     def _get_session(self, headers, org_id, session_id):
         session_response = httpx.get(
