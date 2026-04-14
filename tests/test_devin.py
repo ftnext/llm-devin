@@ -1132,3 +1132,76 @@ def test_continue_conversation_null_end_cursor_skips_old_messages(
     )
 
     assert actual == ["New follow-up answer"]
+
+    messages_gets = [
+        c for c in respx_mock.calls if c.request.method == "GET"
+        and "/messages" in str(c.request.url)
+    ]
+    messages_post = [
+        c for c in respx_mock.calls if c.request.method == "POST"
+        and "/messages" in str(c.request.url)
+    ]
+    assert len(messages_gets) >= 1
+    assert len(messages_post) == 1
+    first_get_index = respx_mock.calls.call_count
+    post_index = respx_mock.calls.call_count
+    for i, call in enumerate(respx_mock.calls):
+        url = str(call.request.url)
+        if call.request.method == "GET" and "/messages" in url:
+            first_get_index = min(first_get_index, i)
+        if call.request.method == "POST" and "/messages" in url:
+            post_index = min(post_index, i)
+    assert first_get_index < post_index
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_collect_existing_event_ids_pagination_error(monkeypatch, respx_mock):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "event_id": "evt-1",
+                        "source": "devin",
+                        "message": "Old",
+                        "created_at": 1000,
+                    },
+                ],
+                "end_cursor": None,
+                "has_next_page": True,
+            },
+        )
+    )
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options.debug = False
+
+    prev_response = MagicMock()
+    prev_response.response_json = {
+        "session_id": "devin-test-session",
+        "end_cursor": None,
+    }
+    conversation = MagicMock()
+    conversation.responses = [prev_response]
+
+    with pytest.raises(
+        llm.ModelError,
+        match="messages pagination indicated another page without an end_cursor",
+    ):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=conversation,
+                key="test-api-key",
+            )
+        )
