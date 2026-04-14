@@ -113,9 +113,12 @@ class DevinModel(llm.KeyModel):
                 prev_cursor = prev_response_json.get("end_cursor")
             poll_state: dict = {"cursor": prev_cursor}
 
-            self._collect_existing_event_ids(
-                headers, org_id, session_id, poll_state, seen_event_ids,
-            )
+            try:
+                self._collect_existing_event_ids(
+                    headers, org_id, session_id, poll_state, seen_event_ids,
+                )
+            except (httpx.RequestError, httpx.HTTPStatusError):
+                pass
 
             try:
                 send_message_response = httpx.post(
