@@ -219,10 +219,11 @@ class DevinModel(llm.KeyModel):
                         " without an end_cursor"
                     )
                 cursor = new_cursor
+                poll_state["cursor"] = cursor
                 continue
             if new_cursor is not None:
                 cursor = new_cursor
-                poll_state["cursor"] = cursor
+            poll_state["cursor"] = cursor
             break
 
     def _get_session(self, headers, org_id, session_id):
