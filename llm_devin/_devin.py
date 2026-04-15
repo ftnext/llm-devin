@@ -99,11 +99,27 @@ class DevinModel(llm.KeyModel):
 
         previous_session_id = self._get_previous_session_id(conversation)
 
+        seen_event_ids: set[str] = set()
+
         if previous_session_id is not None:
             session_id = previous_session_id
             logger.debug(
                 "Continuing session %s", session_id,
             )
+
+            prev_cursor = None
+            prev_response_json = conversation.responses[-1].response_json
+            if isinstance(prev_response_json, dict):
+                prev_cursor = prev_response_json.get("end_cursor")
+            poll_state: dict = {"cursor": prev_cursor}
+
+            try:
+                self._collect_existing_event_ids(
+                    headers, org_id, session_id, poll_state, seen_event_ids,
+                )
+            except (httpx.RequestError, httpx.HTTPStatusError):
+                pass
+
             try:
                 send_message_response = httpx.post(
                     f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
@@ -119,12 +135,6 @@ class DevinModel(llm.KeyModel):
                         "Please start a new conversation."
                     ) from ex
                 raise
-
-            prev_cursor = None
-            prev_response_json = conversation.responses[-1].response_json
-            if isinstance(prev_response_json, dict):
-                prev_cursor = prev_response_json.get("end_cursor")
-            poll_state: dict = {"cursor": prev_cursor}
         else:
             request_json = {"prompt": prompt.prompt}
             logger.debug("Request JSON: %s", request_json)
@@ -144,8 +154,6 @@ class DevinModel(llm.KeyModel):
             session_id = create_session_data["session_id"]
             print_immediately("Devin URL:", create_session_data["url"])
             poll_state = {"cursor": None}
-
-        seen_event_ids: set[str] = set()
 
         devin_messages: list[str] = []
         while True:
@@ -179,6 +187,44 @@ class DevinModel(llm.KeyModel):
             "session_id": session_id,
             "end_cursor": poll_state["cursor"],
         }
+
+    def _collect_existing_event_ids(
+        self, headers, org_id, session_id, poll_state, seen_event_ids,
+    ):
+        cursor = poll_state["cursor"]
+        while True:
+            params = {}
+            if cursor is not None:
+                params["after"] = cursor
+            messages_response = httpx.get(
+                f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
+                headers=headers,
+                params=params,
+                timeout=TIMEOUT,
+            )
+            messages_response.raise_for_status()
+            data = messages_response.json()
+            logger.debug(
+                "collect existing messages response",
+                extra={"data": data},
+            )
+            for item in data["items"]:
+                seen_event_ids.add(item["event_id"])
+            has_next_page = data.get("has_next_page")
+            new_cursor = data.get("end_cursor")
+            if has_next_page:
+                if new_cursor is None:
+                    raise llm.ModelError(
+                        "messages pagination indicated another page"
+                        " without an end_cursor"
+                    )
+                cursor = new_cursor
+                poll_state["cursor"] = cursor
+                continue
+            if new_cursor is not None:
+                cursor = new_cursor
+            poll_state["cursor"] = cursor
+            break
 
     def _get_session(self, headers, org_id, session_id):
         session_response = httpx.get(
