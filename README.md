@@ -29,6 +29,21 @@ export LLM_DEVIN_ORG_ID=your_org_id_here
 llm -m devin "Hello, Devin"
 ```
 
+Options for creating a new session (all optional; see the [API reference](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions)):
+
+```bash
+llm -m devin \
+  -o title "Release notes" \
+  -o tags "release-notes,owner-repo" \
+  -o repos "owner/repo" \
+  -o max_acu_limit 5 \
+  -o playbook_id playbook-xxxx \
+  -o devin_mode fast \
+  "Explain the changes in the latest release of https://github.com/owner/repo"
+```
+
+`tags` and `repos` are comma-separated. These options only apply when a new session is created; they are ignored when continuing a conversation.
+
 Continue that Devin conversation with `llm -c` immediately after the previous command, or specify the model explicitly:
 
 ```bash
