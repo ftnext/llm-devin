@@ -200,6 +200,7 @@ def test_create_session_with_options(monkeypatch, respx_mock):
     )
     respx_mock.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
         return_value=httpx.Response(
             status_code=200,
@@ -208,6 +209,7 @@ def test_create_session_with_options(monkeypatch, respx_mock):
     )
     respx_mock.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
         return_value=httpx.Response(
             status_code=200,
