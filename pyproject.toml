@@ -24,7 +24,7 @@ keywords = ["llm", "devin"]
 requires-python = ">=3.10"
 dependencies = [
     "llm",
-    "httpx",
+    "httpx2",
     "happy-python-logging",
     "python-json-logger",
     "mcp",
@@ -44,4 +44,4 @@ CI = "https://github.com/ftnext/llm-devin/actions"
 devin = "llm_devin"
 
 [project.optional-dependencies]
-test = ["pytest", "respx"]
+test = ["pytest"]
