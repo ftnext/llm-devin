@@ -1273,3 +1273,8 @@ def test_collect_existing_event_ids_pagination_error(monkeypatch, respx_mock):
                 key="test-api-key",
             )
         )
+
+
+def test_devin_mode_rejects_unknown_value():
+    with pytest.raises(ValueError):
+        DevinModel.Options(devin_mode="turbo")

@@ -59,6 +59,7 @@ class DevinModel(llm.KeyModel):
             description="Devin agent mode for the new session"
             " (normal, fast, lite, ultra, fusion)",
             default=None,
+            pattern="^(normal|fast|lite|ultra|fusion)$",
         )
 
     def __init__(self) -> None:
