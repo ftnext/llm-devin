@@ -1,11 +1,10 @@
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2
 import json
 
 import llm
 import pytest
-import respx
 from llm.plugins import load_plugins, pm
 from mcp.types import CallToolResult, TextContent
 
@@ -13,6 +12,81 @@ from llm_devin import DeepWikiModel, DevinModel
 
 ORG_ID = "org-test123"
 BASE_URL = "https://api.devin.ai/v3"
+API_KEY = "test-api-key"
+
+
+class MockRoute:
+    def __init__(self, method, url, json__eq, params__contains):
+        self.method = method
+        self.url = url
+        self.json__eq = json__eq
+        self.params__contains = params__contains
+        self.responses = []
+        self.called = False
+
+    def mock(self, return_value=None, side_effect=None):
+        self.responses = list(side_effect) if side_effect else [return_value]
+
+    def matches(self, request):
+        if request.method != self.method:
+            return False
+        if request.url.copy_with(query=None) != httpx2.URL(self.url):
+            return False
+        if self.json__eq is not None and json.loads(request.content) != self.json__eq:
+            return False
+        if self.params__contains is not None and any(
+            request.url.params.get(k) != v for k, v in self.params__contains.items()
+        ):
+            return False
+        return True
+
+    def respond(self, request):
+        self.called = True
+        response = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
+        response.request = request
+        return response
+
+
+class MockDevinApi:
+    def __init__(self):
+        self.routes = []
+        self.calls = []
+
+    def _route(self, method, url, json__eq=None, params__contains=None):
+        route = MockRoute(method, url, json__eq, params__contains)
+        self.routes.append(route)
+        return route
+
+    def get(self, url, **kwargs):
+        return self._route("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self._route("POST", url, **kwargs)
+
+    def handler(self, request):
+        self.calls.append(request)
+        assert request.headers["Authorization"] == f"Bearer {API_KEY}"
+        for route in self.routes:
+            if route.matches(request):
+                return route.respond(request)
+        pytest.fail(f"Unmocked request: {request.method} {request.url}")
+
+    def assert_all_called(self):
+        for route in self.routes:
+            assert route.called, f"Route not called: {route.method} {route.url}"
+
+
+@pytest.fixture
+def mock_api():
+    api = MockDevinApi()
+    transport = httpx2.MockTransport(api.handler)
+
+    def create_http_client(headers):
+        return httpx2.Client(headers=headers, transport=transport)
+
+    with patch("llm_devin._devin.create_http_client", create_http_client):
+        yield api
+    api.assert_all_called()
 
 
 def test_plugin_is_installed():
@@ -22,16 +96,14 @@ def test_plugin_is_installed():
     assert "llm_devin" in names
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_execute_flow(monkeypatch, respx_mock):
+def test_execute_flow(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"prompt": "Hello. How are you?"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -40,11 +112,10 @@ def test_execute_flow(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -53,11 +124,10 @@ def test_execute_flow(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "items": [
@@ -91,7 +161,7 @@ def test_execute_flow(monkeypatch, respx_mock):
             stream=False,
             response=MagicMock(),
             conversation=MagicMock(),
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -102,16 +172,14 @@ def test_execute_flow(monkeypatch, respx_mock):
     )
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_execute_flow_exit_status(monkeypatch, respx_mock):
+def test_execute_flow_exit_status(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"prompt": "Fix the bug"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -120,11 +188,10 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -133,11 +200,10 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "items": [
@@ -165,20 +231,18 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
             stream=False,
             response=MagicMock(),
             conversation=MagicMock(),
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
     assert actual == ["Done!"]
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_create_session_with_options(monkeypatch, respx_mock):
+def test_create_session_with_options(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={
             "prompt": "Explain the latest release",
             "title": "Release notes",
@@ -189,7 +253,7 @@ def test_create_session_with_options(monkeypatch, respx_mock):
             "devin_mode": "fast",
         },
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -198,20 +262,18 @@ def test_create_session_with_options(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={"session_id": "devin-test-session", "status": "exit"},
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={"items": [], "end_cursor": None, "has_next_page": False},
         )
@@ -235,23 +297,21 @@ def test_create_session_with_options(monkeypatch, respx_mock):
             stream=False,
             response=MagicMock(),
             conversation=MagicMock(),
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
     assert actual == []
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
+def test_execute_flow_multi_page_messages(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"prompt": "Do something"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -260,11 +320,10 @@ def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -273,7 +332,7 @@ def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
             },
         )
     )
-    page1 = httpx.Response(
+    page1 = httpx2.Response(
         status_code=200,
         json={
             "items": [
@@ -288,7 +347,7 @@ def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
             "has_next_page": True,
         },
     )
-    page2 = httpx.Response(
+    page2 = httpx2.Response(
         status_code=200,
         json={
             "items": [
@@ -303,9 +362,8 @@ def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
             "has_next_page": False,
         },
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(side_effect=[page1, page2])
 
     sut = DevinModel()
@@ -319,7 +377,7 @@ def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
             stream=False,
             response=MagicMock(),
             conversation=MagicMock(),
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -341,7 +399,7 @@ def test_execute_requires_org_id(monkeypatch):
                 stream=False,
                 response=MagicMock(),
                 conversation=MagicMock(),
-                key="test-api-key",
+                key=API_KEY,
             )
         )
 
@@ -375,8 +433,7 @@ def test_deepwiki_execute(client_run):
     assert actual[0] == "DeepWiki markdown for repository ftnext/llm-devin"
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
+def test_debug_logging_creates_jsonl_file(monkeypatch, mock_api, tmp_path):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
     monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
 
@@ -402,15 +459,15 @@ def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
         "end_cursor": None,
         "has_next_page": False,
     }
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
-    ).mock(return_value=httpx.Response(200, json=create_session_data))
-    respx_mock.get(
+    ).mock(return_value=httpx2.Response(200, json=create_session_data))
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-    ).mock(return_value=httpx.Response(200, json=session_detail_data))
-    respx_mock.get(
+    ).mock(return_value=httpx2.Response(200, json=session_detail_data))
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-    ).mock(return_value=httpx.Response(200, json=messages_data))
+    ).mock(return_value=httpx2.Response(200, json=messages_data))
 
     sut = DevinModel()
     prompt = MagicMock()
@@ -423,7 +480,7 @@ def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
             stream=False,
             response=MagicMock(),
             conversation=MagicMock(),
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -459,17 +516,16 @@ def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
         assert "timestamp" in record
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
 def test_no_debug_logging_when_debug_option_is_false(
-    monkeypatch, respx_mock, tmp_path
+    monkeypatch, mock_api, tmp_path
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
     monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -478,10 +534,10 @@ def test_no_debug_logging_when_debug_option_is_false(
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -490,10 +546,10 @@ def test_no_debug_logging_when_debug_option_is_false(
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "items": [
@@ -521,7 +577,7 @@ def test_no_debug_logging_when_debug_option_is_false(
             stream=False,
             response=MagicMock(),
             conversation=MagicMock(),
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -529,8 +585,7 @@ def test_no_debug_logging_when_debug_option_is_false(
     assert not log_dir.exists()
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
+def test_debug_logging_preserves_non_ascii(monkeypatch, mock_api, tmp_path):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
     monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
 
@@ -547,10 +602,10 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
         "end_cursor": None,
         "has_next_page": False,
     }
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -559,10 +614,10 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -571,9 +626,9 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-    ).mock(return_value=httpx.Response(200, json=messages_data))
+    ).mock(return_value=httpx2.Response(200, json=messages_data))
 
     sut = DevinModel()
     prompt = MagicMock()
@@ -586,7 +641,7 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
             stream=False,
             response=MagicMock(),
             conversation=MagicMock(),
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -599,16 +654,14 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
     assert "\\u" not in raw_content
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
+def test_duplicate_messages_are_deduplicated(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"prompt": "Do work"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             status_code=200,
             json={
                 "session_id": "devin-test-session",
@@ -619,7 +672,7 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
     )
 
     session_responses = [
-        httpx.Response(
+        httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -627,7 +680,7 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
                 "status_detail": "working",
             },
         ),
-        httpx.Response(
+        httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -636,12 +689,11 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
             },
         ),
     ]
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(side_effect=session_responses)
 
-    messages_poll1 = httpx.Response(
+    messages_poll1 = httpx2.Response(
         200,
         json={
             "items": [
@@ -656,7 +708,7 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
             "has_next_page": False,
         },
     )
-    messages_poll2 = httpx.Response(
+    messages_poll2 = httpx2.Response(
         200,
         json={
             "items": [
@@ -677,9 +729,8 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
             "has_next_page": False,
         },
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(side_effect=[messages_poll1, messages_poll2])
 
     sut = DevinModel()
@@ -694,23 +745,21 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
                 stream=False,
                 response=MagicMock(),
                 conversation=MagicMock(),
-                key="test-api-key",
+                key=API_KEY,
             )
         )
 
     assert actual == ["Working on it", "\nAll done"]
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_new_session_stores_session_id(monkeypatch, respx_mock):
+def test_new_session_stores_session_id(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"prompt": "Hello"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -719,11 +768,10 @@ def test_new_session_stores_session_id(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -732,11 +780,10 @@ def test_new_session_stores_session_id(monkeypatch, respx_mock):
             },
         )
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "items": [
@@ -765,7 +812,7 @@ def test_new_session_stores_session_id(monkeypatch, respx_mock):
             stream=False,
             response=response,
             conversation=None,
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -775,22 +822,19 @@ def test_new_session_stores_session_id(monkeypatch, respx_mock):
     }
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_continue_conversation(monkeypatch, respx_mock):
+def test_continue_conversation(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"message": "Follow up question"},
     ).mock(
-        return_value=httpx.Response(200, json={})
+        return_value=httpx2.Response(200, json={})
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -799,7 +843,7 @@ def test_continue_conversation(monkeypatch, respx_mock):
             },
         )
     )
-    prefetch_response = httpx.Response(
+    prefetch_response = httpx2.Response(
         200,
         json={
             "items": [
@@ -820,7 +864,7 @@ def test_continue_conversation(monkeypatch, respx_mock):
             "has_next_page": False,
         },
     )
-    poll_response = httpx.Response(
+    poll_response = httpx2.Response(
         200,
         json={
             "items": [
@@ -847,9 +891,8 @@ def test_continue_conversation(monkeypatch, respx_mock):
             "has_next_page": False,
         },
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(side_effect=[prefetch_response, poll_response])
 
     sut = DevinModel()
@@ -873,7 +916,7 @@ def test_continue_conversation(monkeypatch, respx_mock):
             stream=False,
             response=response,
             conversation=conversation,
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -884,22 +927,19 @@ def test_continue_conversation(monkeypatch, respx_mock):
     }
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
+def test_continue_conversation_uses_previous_cursor(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"message": "Another question"},
     ).mock(
-        return_value=httpx.Response(200, json={})
+        return_value=httpx2.Response(200, json={})
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -908,7 +948,7 @@ def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
             },
         )
     )
-    prefetch_response = httpx.Response(
+    prefetch_response = httpx2.Response(
         200,
         json={
             "items": [
@@ -923,7 +963,7 @@ def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
             "has_next_page": False,
         },
     )
-    poll_response = httpx.Response(
+    poll_response = httpx2.Response(
         200,
         json={
             "items": [
@@ -944,9 +984,8 @@ def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
             "has_next_page": False,
         },
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         params__contains={"after": "cursor-prev"},
     ).mock(side_effect=[prefetch_response, poll_response])
 
@@ -971,7 +1010,7 @@ def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
             stream=False,
             response=response,
             conversation=conversation,
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
@@ -982,18 +1021,16 @@ def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
     }
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
 def test_continue_conversation_invalid_session_raises_model_error(
-    monkeypatch, respx_mock
+    monkeypatch, mock_api
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-deleted-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         params__contains={"after": "cursor-old"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "items": [],
@@ -1002,12 +1039,11 @@ def test_continue_conversation_invalid_session_raises_model_error(
             },
         )
     )
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-deleted-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"message": "Follow up"},
     ).mock(
-        return_value=httpx.Response(404, json={"error": "session not found"})
+        return_value=httpx2.Response(404, json={"error": "session not found"})
     )
 
     sut = DevinModel()
@@ -1033,23 +1069,21 @@ def test_continue_conversation_invalid_session_raises_model_error(
                 stream=False,
                 response=MagicMock(),
                 conversation=conversation,
-                key="test-api-key",
+                key=API_KEY,
             )
         )
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
 def test_continue_conversation_server_error_is_reraised(
-    monkeypatch, respx_mock
+    monkeypatch, mock_api
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         params__contains={"after": "cursor-old"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "items": [],
@@ -1058,12 +1092,11 @@ def test_continue_conversation_server_error_is_reraised(
             },
         )
     )
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"message": "Follow up"},
     ).mock(
-        return_value=httpx.Response(500, json={"error": "internal server error"})
+        return_value=httpx2.Response(500, json={"error": "internal server error"})
     )
 
     sut = DevinModel()
@@ -1079,36 +1112,33 @@ def test_continue_conversation_server_error_is_reraised(
     conversation = MagicMock()
     conversation.responses = [prev_response]
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx2.HTTPStatusError):
         list(
             sut.execute(
                 prompt,
                 stream=False,
                 response=MagicMock(),
                 conversation=conversation,
-                key="test-api-key",
+                key=API_KEY,
             )
         )
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
 def test_continue_conversation_null_end_cursor_skips_old_messages(
-    monkeypatch, respx_mock
+    monkeypatch, mock_api
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.post(
+    mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
         json__eq={"message": "Follow up"},
     ).mock(
-        return_value=httpx.Response(200, json={})
+        return_value=httpx2.Response(200, json={})
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "session_id": "devin-test-session",
@@ -1117,7 +1147,7 @@ def test_continue_conversation_null_end_cursor_skips_old_messages(
             },
         )
     )
-    prefetch_response = httpx.Response(
+    prefetch_response = httpx2.Response(
         200,
         json={
             "items": [
@@ -1138,7 +1168,7 @@ def test_continue_conversation_null_end_cursor_skips_old_messages(
             "has_next_page": False,
         },
     )
-    poll_response = httpx.Response(
+    poll_response = httpx2.Response(
         200,
         json={
             "items": [
@@ -1171,9 +1201,8 @@ def test_continue_conversation_null_end_cursor_skips_old_messages(
             "has_next_page": False,
         },
     )
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(side_effect=[prefetch_response, poll_response])
 
     sut = DevinModel()
@@ -1197,42 +1226,40 @@ def test_continue_conversation_null_end_cursor_skips_old_messages(
             stream=False,
             response=response,
             conversation=conversation,
-            key="test-api-key",
+            key=API_KEY,
         )
     )
 
     assert actual == ["New follow-up answer"]
 
     messages_gets = [
-        c for c in respx_mock.calls if c.request.method == "GET"
-        and "/messages" in str(c.request.url)
+        c for c in mock_api.calls if c.method == "GET"
+        and "/messages" in str(c.url)
     ]
     messages_post = [
-        c for c in respx_mock.calls if c.request.method == "POST"
-        and "/messages" in str(c.request.url)
+        c for c in mock_api.calls if c.method == "POST"
+        and "/messages" in str(c.url)
     ]
     assert len(messages_gets) >= 1
     assert len(messages_post) == 1
-    first_get_index = respx_mock.calls.call_count
-    post_index = respx_mock.calls.call_count
-    for i, call in enumerate(respx_mock.calls):
-        url = str(call.request.url)
-        if call.request.method == "GET" and "/messages" in url:
+    first_get_index = len(mock_api.calls)
+    post_index = len(mock_api.calls)
+    for i, call in enumerate(mock_api.calls):
+        url = str(call.url)
+        if call.method == "GET" and "/messages" in url:
             first_get_index = min(first_get_index, i)
-        if call.request.method == "POST" and "/messages" in url:
+        if call.method == "POST" and "/messages" in url:
             post_index = min(post_index, i)
     assert first_get_index < post_index
 
 
-@respx.mock(assert_all_called=True, assert_all_mocked=True)
-def test_collect_existing_event_ids_pagination_error(monkeypatch, respx_mock):
+def test_collect_existing_event_ids_pagination_error(monkeypatch, mock_api):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    respx_mock.get(
+    mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
-        headers__contains={"Authorization": "Bearer test-api-key"},
     ).mock(
-        return_value=httpx.Response(
+        return_value=httpx2.Response(
             200,
             json={
                 "items": [
@@ -1272,7 +1299,7 @@ def test_collect_existing_event_ids_pagination_error(monkeypatch, respx_mock):
                 stream=False,
                 response=MagicMock(),
                 conversation=conversation,
-                key="test-api-key",
+                key=API_KEY,
             )
         )
 

@@ -21,7 +21,7 @@ uv sync --extra test
 uv run pytest
 ```
 
-Tests use [respx](https://lundberg.github.io/respx/) to mock HTTP calls and `monkeypatch` to set environment variables.
+Tests mock HTTP calls with `httpx2.MockTransport` (via the `mock_api` fixture, which patches `create_http_client`) and `monkeypatch` to set environment variables.
 
 ## Code Conventions
 

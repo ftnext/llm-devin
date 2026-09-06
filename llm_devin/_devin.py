@@ -6,7 +6,7 @@ import sys
 import time
 from typing import Optional
 
-import httpx
+import httpx2
 import llm
 from pydantic import Field
 from pythonjsonlogger.json import JsonFormatter
@@ -14,7 +14,11 @@ from pythonjsonlogger.json import JsonFormatter
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = httpx.Timeout(5.0, read=10.0)
+TIMEOUT = httpx2.Timeout(5.0, read=10.0)
+
+
+def create_http_client(headers: dict[str, str]) -> httpx2.Client:
+    return httpx2.Client(headers=headers, timeout=TIMEOUT)
 
 
 def print_immediately(*objects) -> None:
@@ -122,7 +126,10 @@ class DevinModel(llm.KeyModel):
     def _execute(self, prompt, stream, response, conversation, key):
         org_id = self._org_id()
         headers = {"Authorization": f"Bearer {key}"}
+        with create_http_client(headers) as client:
+            yield from self._run(client, prompt, response, conversation, org_id)
 
+    def _run(self, client, prompt, response, conversation, org_id):
         previous_session_id = self._get_previous_session_id(conversation)
 
         seen_event_ids: set[str] = set()
@@ -141,20 +148,18 @@ class DevinModel(llm.KeyModel):
 
             try:
                 self._collect_existing_event_ids(
-                    headers, org_id, session_id, poll_state, seen_event_ids,
+                    client, org_id, session_id, poll_state, seen_event_ids,
                 )
-            except (httpx.RequestError, httpx.HTTPStatusError):
+            except (httpx2.RequestError, httpx2.HTTPStatusError):
                 pass
 
             try:
-                send_message_response = httpx.post(
+                send_message_response = client.post(
                     f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
-                    headers=headers,
                     json={"message": prompt.prompt},
-                    timeout=TIMEOUT,
-                )
+                    )
                 send_message_response.raise_for_status()
-            except httpx.HTTPStatusError as ex:
+            except httpx2.HTTPStatusError as ex:
                 if ex.response.status_code in {404, 410}:
                     raise llm.ModelError(
                         "The previous Devin session is invalid or expired. "
@@ -164,11 +169,9 @@ class DevinModel(llm.KeyModel):
         else:
             request_json = self._build_create_session_json(prompt)
             logger.debug("Request JSON: %s", request_json)
-            create_session_response = httpx.post(
+            create_session_response = client.post(
                 f"{self.BASE_URL}/organizations/{org_id}/sessions",
-                headers=headers,
                 json=request_json,
-                timeout=TIMEOUT,
             )
             create_session_response.raise_for_status()
 
@@ -184,17 +187,17 @@ class DevinModel(llm.KeyModel):
         devin_messages: list[str] = []
         while True:
             try:
-                session_detail = self._get_session(headers, org_id, session_id)
-            except (httpx.RequestError, httpx.HTTPStatusError):
+                session_detail = self._get_session(client, org_id, session_id)
+            except (httpx2.RequestError, httpx2.HTTPStatusError):
                 pass
             else:
                 try:
                     yield from self._drain_messages(
-                        headers, org_id, session_id,
+                        client, org_id, session_id,
                         devin_messages, poll_state,
                         seen_event_ids,
                     )
-                except (httpx.RequestError, httpx.HTTPStatusError):
+                except (httpx2.RequestError, httpx2.HTTPStatusError):
                     pass
 
                 status = session_detail["status"]
@@ -238,18 +241,16 @@ class DevinModel(llm.KeyModel):
         return request_json
 
     def _collect_existing_event_ids(
-        self, headers, org_id, session_id, poll_state, seen_event_ids,
+        self, client, org_id, session_id, poll_state, seen_event_ids,
     ):
         cursor = poll_state["cursor"]
         while True:
             params = {}
             if cursor is not None:
                 params["after"] = cursor
-            messages_response = httpx.get(
+            messages_response = client.get(
                 f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
-                headers=headers,
                 params=params,
-                timeout=TIMEOUT,
             )
             messages_response.raise_for_status()
             data = messages_response.json()
@@ -275,11 +276,9 @@ class DevinModel(llm.KeyModel):
             poll_state["cursor"] = cursor
             break
 
-    def _get_session(self, headers, org_id, session_id):
-        session_response = httpx.get(
+    def _get_session(self, client, org_id, session_id):
+        session_response = client.get(
             f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}",
-            headers=headers,
-            timeout=TIMEOUT,
         )
         session_response.raise_for_status()
         session_json = session_response.json()
@@ -290,7 +289,7 @@ class DevinModel(llm.KeyModel):
         return session_json
 
     def _drain_messages(
-        self, headers, org_id, session_id, devin_messages, poll_state,
+        self, client, org_id, session_id, devin_messages, poll_state,
         seen_event_ids,
     ):
         cursor = poll_state["cursor"]
@@ -298,11 +297,9 @@ class DevinModel(llm.KeyModel):
             params = {}
             if cursor is not None:
                 params["after"] = cursor
-            messages_response = httpx.get(
+            messages_response = client.get(
                 f"{self.BASE_URL}/organizations/{org_id}/sessions/{session_id}/messages",
-                headers=headers,
                 params=params,
-                timeout=TIMEOUT,
             )
             messages_response.raise_for_status()
             data = messages_response.json()
