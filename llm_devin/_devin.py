@@ -35,6 +35,31 @@ class DevinModel(llm.KeyModel):
             description="Enable debug logging of API responses to JSONL file",
             default=False,
         )
+        title: Optional[str] = Field(
+            description="Custom title for the new session",
+            default=None,
+        )
+        tags: Optional[str] = Field(
+            description="Comma-separated tags to add to the new session",
+            default=None,
+        )
+        repos: Optional[str] = Field(
+            description="Comma-separated repositories (owner/repo) for the new session",
+            default=None,
+        )
+        max_acu_limit: Optional[int] = Field(
+            description="Maximum ACU limit for the new session",
+            default=None,
+        )
+        playbook_id: Optional[str] = Field(
+            description="Playbook ID to use for the new session",
+            default=None,
+        )
+        devin_mode: Optional[str] = Field(
+            description="Devin agent mode for the new session"
+            " (normal, fast, lite, ultra, fusion)",
+            default=None,
+        )
 
     def __init__(self) -> None:
         self.model_id = "devin"
@@ -136,7 +161,7 @@ class DevinModel(llm.KeyModel):
                     ) from ex
                 raise
         else:
-            request_json = {"prompt": prompt.prompt}
+            request_json = self._build_create_session_json(prompt)
             logger.debug("Request JSON: %s", request_json)
             create_session_response = httpx.post(
                 f"{self.BASE_URL}/organizations/{org_id}/sessions",
@@ -187,6 +212,29 @@ class DevinModel(llm.KeyModel):
             "session_id": session_id,
             "end_cursor": poll_state["cursor"],
         }
+
+    @staticmethod
+    def _split_csv(value: str | None) -> list[str] | None:
+        if value is None:
+            return None
+        items = [item.strip() for item in value.split(",") if item.strip()]
+        return items or None
+
+    def _build_create_session_json(self, prompt) -> dict:
+        options = prompt.options
+        request_json: dict = {"prompt": prompt.prompt}
+        optional_fields = {
+            "title": options.title,
+            "tags": self._split_csv(options.tags),
+            "repos": self._split_csv(options.repos),
+            "max_acu_limit": options.max_acu_limit,
+            "playbook_id": options.playbook_id,
+            "devin_mode": options.devin_mode,
+        }
+        for name, value in optional_fields.items():
+            if value is not None:
+                request_json[name] = value
+        return request_json
 
     def _collect_existing_event_ids(
         self, headers, org_id, session_id, poll_state, seen_event_ids,

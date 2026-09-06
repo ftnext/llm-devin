@@ -83,7 +83,7 @@ def test_execute_flow(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello. How are you?"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     actual = list(
         sut.execute(
@@ -157,7 +157,7 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Fix the bug"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     actual = list(
         sut.execute(
@@ -170,6 +170,74 @@ def test_execute_flow_exit_status(monkeypatch, respx_mock):
     )
 
     assert actual == ["Done!"]
+
+
+@respx.mock(assert_all_called=True, assert_all_mocked=True)
+def test_create_session_with_options(monkeypatch, respx_mock):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    respx_mock.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+        headers__contains={"Authorization": "Bearer test-api-key"},
+        json__eq={
+            "prompt": "Explain the latest release",
+            "title": "Release notes",
+            "tags": ["release-notes", "owner-repo"],
+            "repos": ["owner/repo"],
+            "max_acu_limit": 5,
+            "playbook_id": "playbook-abc",
+            "devin_mode": "fast",
+        },
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "session_id": "devin-test-session",
+                "url": "https://app.devin.ai/sessions/devin-test-session",
+                "status": "running",
+            },
+        )
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={"session_id": "devin-test-session", "status": "exit"},
+        )
+    )
+    respx_mock.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+    ).mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={"items": [], "end_cursor": None, "has_next_page": False},
+        )
+    )
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Explain the latest release"
+    prompt.options = DevinModel.Options(
+        title="Release notes",
+        tags="release-notes, owner-repo",
+        repos="owner/repo",
+        max_acu_limit=5,
+        playbook_id="playbook-abc",
+        devin_mode="fast",
+    )
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=MagicMock(),
+            conversation=MagicMock(),
+            key="test-api-key",
+        )
+    )
+
+    assert actual == []
 
 
 @respx.mock(assert_all_called=True, assert_all_mocked=True)
@@ -241,7 +309,7 @@ def test_execute_flow_multi_page_messages(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Do something"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     actual = list(
         sut.execute(
@@ -262,7 +330,7 @@ def test_execute_requires_org_id(monkeypatch):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     with pytest.raises(llm.ModelError, match="LLM_DEVIN_ORG_ID"):
         list(
@@ -345,7 +413,7 @@ def test_debug_logging_creates_jsonl_file(monkeypatch, respx_mock, tmp_path):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello"
-    prompt.options.debug = True
+    prompt.options = DevinModel.Options(debug=True)
 
     list(
         sut.execute(
@@ -443,7 +511,7 @@ def test_no_debug_logging_when_debug_option_is_false(
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     list(
         sut.execute(
@@ -508,7 +576,7 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, respx_mock, tmp_path):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello"
-    prompt.options.debug = True
+    prompt.options = DevinModel.Options(debug=True)
 
     list(
         sut.execute(
@@ -615,7 +683,7 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Do work"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     with patch("llm_devin._devin.time.sleep"):
         actual = list(
@@ -686,7 +754,7 @@ def test_new_session_stores_session_id(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Hello"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
     response = MagicMock()
 
     list(
@@ -785,7 +853,7 @@ def test_continue_conversation(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Follow up question"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     prev_response = MagicMock()
     prev_response.response_json = {
@@ -883,7 +951,7 @@ def test_continue_conversation_uses_previous_cursor(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Another question"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     prev_response = MagicMock()
     prev_response.response_json = {
@@ -943,7 +1011,7 @@ def test_continue_conversation_invalid_session_raises_model_error(
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Follow up"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     prev_response = MagicMock()
     prev_response.response_json = {
@@ -999,7 +1067,7 @@ def test_continue_conversation_server_error_is_reraised(
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Follow up"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     prev_response = MagicMock()
     prev_response.response_json = {
@@ -1109,7 +1177,7 @@ def test_continue_conversation_null_end_cursor_skips_old_messages(
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Follow up"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     prev_response = MagicMock()
     prev_response.response_json = {
@@ -1182,7 +1250,7 @@ def test_collect_existing_event_ids_pagination_error(monkeypatch, respx_mock):
     sut = DevinModel()
     prompt = MagicMock()
     prompt.prompt = "Follow up"
-    prompt.options.debug = False
+    prompt.options = DevinModel.Options()
 
     prev_response = MagicMock()
     prev_response.response_json = {
