@@ -26,6 +26,17 @@ TIMEOUT = httpx2.Timeout(5.0, read=10.0)
 
 SESSION_URL_BASE = "https://app.devin.ai/sessions/"
 SESSION_ID_PATTERN = re.compile(r"^(?:devin-)?([0-9a-fA-F]{32})$")
+API_BASE_URL = "https://api.devin.ai/v3"
+ORG_ID_ENV_VAR = "LLM_DEVIN_ORG_ID"
+
+
+def resolve_org_id() -> str:
+    org_id = os.environ.get(ORG_ID_ENV_VAR, "")
+    if not org_id:
+        raise llm.ModelError(
+            f"{ORG_ID_ENV_VAR} environment variable is required"
+        )
+    return org_id
 
 
 def parse_session_reference(value: str) -> str:
@@ -74,7 +85,7 @@ class DevinModel(llm.KeyModel):
     key_env_var = "LLM_DEVIN_KEY"
     can_stream = True
 
-    BASE_URL = "https://api.devin.ai/v3"
+    BASE_URL = API_BASE_URL
 
     class Options(llm.Options):
         debug: Optional[bool] = Field(
@@ -117,12 +128,7 @@ class DevinModel(llm.KeyModel):
         self.model_id = "devin"
 
     def _org_id(self) -> str:
-        org_id = os.environ.get("LLM_DEVIN_ORG_ID", "")
-        if not org_id:
-            raise llm.ModelError(
-                "LLM_DEVIN_ORG_ID environment variable is required"
-            )
-        return org_id
+        return resolve_org_id()
 
     def _setup_debug_logging(self, debug: bool) -> logging.FileHandler | None:
         if not debug:

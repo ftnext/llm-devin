@@ -67,6 +67,30 @@ Start an interactive chat session:
 llm chat -m devin
 ```
 
+### Reading an existing Devin session
+
+`llm devin status` and `llm devin messages` read an existing session without sending anything to Devin. They only call read-only Devin API endpoints (get session, list session messages): no session is created, no message is sent, and no suspended session is resumed. They need no local `llm` conversation history, so they work after the CLI exited or the connection dropped, and for sessions started from the Devin web app or another machine. Each command fetches once and exits; it does not poll until the session finishes.
+
+Both commands accept a session ID or an `app.devin.ai` session URL (the same values as `-o session`), and read `LLM_DEVIN_KEY` (or `llm keys set devin`, or `--key`) and `LLM_DEVIN_ORG_ID`.
+
+```bash
+llm devin status devin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+llm devin status https://app.devin.ai/sessions/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+llm devin status devin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --json
+```
+
+`status` shows what the API returns for the session: status and status detail, title, tags, creation/update timestamps (raw values from the API), consumed ACUs, structured output, pull request URLs with their state, plus the latest message from Devin. Fields the API does not provide are omitted.
+
+```bash
+llm devin messages devin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+llm devin messages devin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --source devin --limit 3
+llm devin messages devin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --json
+```
+
+`messages` lists the session messages oldest first, following the API pagination to the end so that `--limit N` returns the N most recent ones. `--source devin|user` filters by sender.
+
+With `--json`, only JSON is written to standard output, so it can be piped into `jq` or another script. Invalid session IDs/URLs, a missing key or organization ID, sessions that are not accessible, and API or network failures are reported on standard error and exit with a non-zero status.
+
 ### DeepWiki
 
 ```bash
