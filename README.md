@@ -50,6 +50,17 @@ Continue that Devin conversation with `llm -c` immediately after the previous co
 llm -m devin -c "Follow-up message"
 ```
 
+Send a message to an existing Devin session by ID or URL, even when there is no local `llm` conversation history for it (e.g. a session started from the Devin web app or on another machine):
+
+```bash
+llm -m devin -o session devin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx "Follow-up message"
+llm -m devin -o session https://app.devin.ai/sessions/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx "Follow-up message"
+```
+
+Before sending, `Continuing Devin session: <URL>` is printed. If the value is not a valid session ID/URL, or the session does not exist or is not accessible with your API key, the command fails without creating a new session. The session is recorded in the `llm` log, so you can keep going with `llm -c` afterwards.
+
+`session` cannot be combined with `-c`/`--cid` when that conversation already has history, because the destination would be ambiguous; such a command is rejected. Use `-c`/`--cid` alone to continue the logged conversation, or `-o session` alone to target a specific session.
+
 Start an interactive chat session:
 
 ```bash

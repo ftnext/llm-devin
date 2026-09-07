@@ -1572,3 +1572,407 @@ def test_continue_after_other_model_turn_does_not_reuse_stale_session(
         )
 
     assert mock_api.calls == []
+
+
+SESSION_HEX = "c586d0d01a094c4d94d77e7817cedf4e"
+SESSION_ID = f"devin-{SESSION_HEX}"
+SESSION_URL = f"https://app.devin.ai/sessions/{SESSION_HEX}"
+
+
+def _mock_explicit_session(mock_api, message="Hello again"):
+    mock_api.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+        json__eq={"message": message},
+    ).mock(return_value=httpx2.Response(200, json={}))
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}",
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "session_id": SESSION_ID,
+                "status": "running",
+                "status_detail": "finished",
+            },
+        )
+    )
+    prefetch_response = httpx2.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "devin",
+                    "message": "Old answer",
+                    "created_at": 1000,
+                },
+            ],
+            "end_cursor": "cursor-1",
+            "has_next_page": False,
+        },
+    )
+    poll_response = httpx2.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-1",
+                    "source": "devin",
+                    "message": "Old answer",
+                    "created_at": 1000,
+                },
+                {
+                    "event_id": "evt-2",
+                    "source": "devin",
+                    "message": "New answer",
+                    "created_at": 2000,
+                },
+            ],
+            "end_cursor": "cursor-2",
+            "has_next_page": False,
+        },
+    )
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+    ).mock(side_effect=[prefetch_response, poll_response])
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [SESSION_ID, SESSION_HEX, SESSION_URL, f"{SESSION_URL}/", f"  {SESSION_URL}?x=1 "],
+    ids=["id", "bare-hex", "url", "url-trailing-slash", "url-query-whitespace"],
+)
+def test_send_to_explicit_session(monkeypatch, mock_api, capsys, reference):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    _mock_explicit_session(mock_api)
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=reference)
+    response = MagicMock()
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=response,
+            conversation=None,
+            key=API_KEY,
+        )
+    )
+
+    assert actual == ["New answer"]
+    assert response.response_json == {
+        "session_id": SESSION_ID,
+        "end_cursor": "cursor-2",
+    }
+    assert f"Continuing Devin session: {SESSION_URL}" in capsys.readouterr().out
+    assert not any(
+        c.method == "POST" and str(c.url).endswith("/sessions")
+        for c in mock_api.calls
+    )
+    first_messages_get = next(
+        c for c in mock_api.calls
+        if c.method == "GET" and "/messages" in str(c.url)
+    )
+    assert first_messages_get.url.params.get("after") is None
+
+
+def test_send_to_explicit_session_with_empty_conversation(
+    monkeypatch, mock_api
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    _mock_explicit_session(mock_api)
+
+    sut = DevinModel()
+    conversation = llm.Conversation(model=sut)
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=SESSION_URL)
+    response = MagicMock()
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=response,
+            conversation=conversation,
+            key=API_KEY,
+        )
+    )
+
+    assert actual == ["New answer"]
+    assert response.response_json["session_id"] == SESSION_ID
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "",
+        "   ",
+        "not-a-session",
+        "devin-123",
+        "devin-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "https://example.com/sessions/" + SESSION_HEX,
+        "https://app.devin.ai/" + SESSION_HEX,
+        "https://app.devin.ai/sessions/",
+        "https://app.devin.ai/sessions/not-hex",
+        f"https://app.devin.ai/sessions/{SESSION_HEX}/extra",
+    ],
+)
+def test_invalid_session_reference_is_rejected_before_any_request(
+    monkeypatch, mock_api, reference
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=reference)
+
+    with pytest.raises(llm.ModelError, match="Invalid Devin session"):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=None,
+                key=API_KEY,
+            )
+        )
+
+    assert mock_api.calls == []
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 404, 410])
+def test_explicit_session_not_accessible_does_not_create_session(
+    monkeypatch, mock_api, status_code
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+    ).mock(return_value=httpx2.Response(status_code, json={"detail": "nope"}))
+    mock_api.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+        json__eq={"message": "Hello again"},
+    ).mock(return_value=httpx2.Response(status_code, json={"detail": "nope"}))
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=SESSION_ID)
+    response = MagicMock()
+
+    with pytest.raises(llm.ModelError) as excinfo:
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=response,
+                conversation=None,
+                key=API_KEY,
+            )
+        )
+
+    assert SESSION_ID in str(excinfo.value)
+    assert SESSION_URL in str(excinfo.value)
+    assert str(status_code) in str(excinfo.value)
+    assert not any(
+        c.method == "POST" and str(c.url).endswith("/sessions")
+        for c in mock_api.calls
+    )
+
+
+def test_explicit_session_server_error_does_not_create_session(
+    monkeypatch, mock_api
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+    ).mock(return_value=httpx2.Response(500))
+    mock_api.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+        json__eq={"message": "Hello again"},
+    ).mock(return_value=httpx2.Response(500))
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=SESSION_ID)
+
+    with pytest.raises(httpx2.HTTPStatusError):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=None,
+                key=API_KEY,
+            )
+        )
+
+    assert not any(
+        c.method == "POST" and str(c.url).endswith("/sessions")
+        for c in mock_api.calls
+    )
+
+
+def test_explicit_session_with_conversation_history_is_rejected(
+    monkeypatch, mock_api
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    sut = DevinModel()
+    prev_response = MagicMock()
+    prev_response.response_json = {
+        "session_id": "devin-test-session",
+        "end_cursor": "cursor-1",
+    }
+    conversation = MagicMock()
+    conversation.responses = [prev_response]
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=SESSION_ID)
+
+    with pytest.raises(llm.ModelError, match="cannot be combined with -c/--cid"):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=conversation,
+                key=API_KEY,
+            )
+        )
+
+    assert mock_api.calls == []
+
+
+def test_explicit_session_with_loaded_conversation_is_rejected(
+    monkeypatch, mock_api, tmp_path
+):
+    from llm.cli import load_conversation
+
+    db_path, conversation_id = _log_first_turn(monkeypatch, mock_api, tmp_path)
+    loaded = load_conversation(conversation_id, database=str(db_path))
+    mock_api.routes.clear()
+    mock_api.calls.clear()
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=SESSION_ID)
+
+    with pytest.raises(llm.ModelError, match="cannot be combined with -c/--cid"):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=loaded,
+                key=API_KEY,
+            )
+        )
+
+    assert mock_api.calls == []
+
+
+def test_explicit_session_then_continue_with_c(monkeypatch, mock_api, tmp_path):
+    from llm.cli import load_conversation
+    from llm.migrations import migrate
+    from sqlite_utils import Database
+
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
+    db_path = tmp_path / "logs.db"
+    db = Database(db_path)
+    migrate(db)
+
+    _mock_explicit_session(mock_api)
+    model = DevinModel()
+    conversation = llm.Conversation(model=model)
+    response = conversation.prompt(
+        "Hello again", key=API_KEY, stream=False, session=SESSION_URL
+    )
+    assert response.text() == "New answer"
+    response.log_to_db(db)
+    assert response.response_json == {
+        "session_id": SESSION_ID,
+        "end_cursor": "cursor-2",
+    }
+
+    loaded = load_conversation(None, database=str(db_path))
+    assert loaded.id == conversation.id
+    assert loaded.responses == []
+    assert loaded.loaded_messages
+
+    mock_api.routes.clear()
+    mock_api.calls.clear()
+    mock_api.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+        json__eq={"message": "Follow up"},
+    ).mock(return_value=httpx2.Response(200, json={}))
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}",
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "session_id": SESSION_ID,
+                "status": "running",
+                "status_detail": "finished",
+            },
+        )
+    )
+    prefetch_response = httpx2.Response(
+        200,
+        json={"items": [], "end_cursor": "cursor-2", "has_next_page": False},
+    )
+    poll_response = httpx2.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-3",
+                    "source": "devin",
+                    "message": "Follow-up answer",
+                    "created_at": 3000,
+                },
+            ],
+            "end_cursor": "cursor-3",
+            "has_next_page": False,
+        },
+    )
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+    ).mock(side_effect=[prefetch_response, poll_response])
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options = DevinModel.Options()
+    follow_up = MagicMock()
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=follow_up,
+            conversation=loaded,
+            key=API_KEY,
+        )
+    )
+
+    assert actual == ["Follow-up answer"]
+    assert follow_up.response_json == {
+        "session_id": SESSION_ID,
+        "end_cursor": "cursor-3",
+    }
+    first_messages_get = next(
+        c for c in mock_api.calls
+        if c.method == "GET" and "/messages" in str(c.url)
+    )
+    assert first_messages_get.url.params.get("after") == "cursor-2"
