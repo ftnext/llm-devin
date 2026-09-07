@@ -8,8 +8,14 @@ from typing import Optional
 
 import httpx2
 import llm
+import sqlite_utils
 from pydantic import Field
 from pythonjsonlogger.json import JsonFormatter
+
+try:
+    from llm.logs import LogStore
+except ImportError:
+    LogStore = None
 
 
 logger = logging.getLogger(__name__)
@@ -112,16 +118,69 @@ class DevinModel(llm.KeyModel):
         finally:
             self._teardown_debug_logging(handler)
 
-    def _get_previous_session_id(self, conversation):
+    @staticmethod
+    def _has_history(conversation) -> bool:
         if conversation is None:
+            return False
+        if getattr(conversation, "responses", None):
+            return True
+        if getattr(conversation, "loaded_messages", None):
+            return True
+        return False
+
+    @staticmethod
+    def _state_from_response_json(response_json) -> dict | None:
+        if not isinstance(response_json, dict):
             return None
+        session_id = response_json.get("session_id")
+        if not session_id:
+            return None
+        return {
+            "session_id": session_id,
+            "end_cursor": response_json.get("end_cursor"),
+        }
+
+    def _state_from_responses(self, conversation) -> dict | None:
         responses = getattr(conversation, "responses", None)
         if not responses:
             return None
-        prev_response_json = responses[-1].response_json
-        if not isinstance(prev_response_json, dict):
+        return self._state_from_response_json(responses[-1].response_json)
+
+    def _state_from_logs_db(self, conversation) -> dict | None:
+        if LogStore is None:
             return None
-        return prev_response_json.get("session_id")
+        conversation_id = getattr(conversation, "id", None)
+        if not conversation_id:
+            return None
+        db_path = llm.user_dir() / "logs.db"
+        if not db_path.exists():
+            return None
+        db = sqlite_utils.Database(db_path)
+        if "turns" not in db.table_names():
+            return None
+        rows = db.query(
+            "select id, model from turns where thread_id = ?"
+            " order by id desc limit 1",
+            [conversation_id],
+        )
+        row = next(iter(rows), None)
+        if row is None or row["model"] != self.model_id:
+            return None
+        response_json = LogStore(db).turn_response_json(row["id"])
+        return self._state_from_response_json(response_json)
+
+    def _get_previous_state(self, conversation) -> dict | None:
+        if not self._has_history(conversation):
+            return None
+        state = self._state_from_responses(conversation)
+        if state is None:
+            state = self._state_from_logs_db(conversation)
+        if state is None:
+            raise llm.ModelError(
+                "Could not find the Devin session ID for this conversation."
+                " Please start a new conversation."
+            )
+        return state
 
     def _execute(self, prompt, stream, response, conversation, key):
         org_id = self._org_id()
@@ -130,21 +189,17 @@ class DevinModel(llm.KeyModel):
             yield from self._run(client, prompt, response, conversation, org_id)
 
     def _run(self, client, prompt, response, conversation, org_id):
-        previous_session_id = self._get_previous_session_id(conversation)
+        previous_state = self._get_previous_state(conversation)
 
         seen_event_ids: set[str] = set()
 
-        if previous_session_id is not None:
-            session_id = previous_session_id
+        if previous_state is not None:
+            session_id = previous_state["session_id"]
             logger.debug(
                 "Continuing session %s", session_id,
             )
 
-            prev_cursor = None
-            prev_response_json = conversation.responses[-1].response_json
-            if isinstance(prev_response_json, dict):
-                prev_cursor = prev_response_json.get("end_cursor")
-            poll_state: dict = {"cursor": prev_cursor}
+            poll_state: dict = {"cursor": previous_state["end_cursor"]}
 
             try:
                 self._collect_existing_event_ids(
