@@ -388,3 +388,40 @@ def test_pagination_without_end_cursor(env, mock_cli_api):
 
     assert result.exit_code != 0
     assert "without an end_cursor" in result.output
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["session_id", "url", "status", "created_at", "updated_at", "acus_consumed"],
+)
+def test_session_response_missing_field(env, mock_cli_api, missing):
+    payload = json.loads(session_response().content)
+    del payload[missing]
+    mock_cli_api.get(SESSION_ENDPOINT).mock(
+        return_value=httpx2.Response(200, json=payload)
+    )
+
+    result = CliRunner().invoke(cli, ["devin", "status", SESSION_ID])
+
+    assert result.exit_code != 0
+    assert "unexpected response" in result.output
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [{"event_id": "evt-1", "created_at": 1000}],
+        [{"event_id": "evt-1", "source": "devin", "created_at": 1000}],
+        ["not an object"],
+    ],
+    ids=["without-source", "without-message", "not-object"],
+)
+def test_messages_response_missing_field(env, mock_cli_api, items):
+    mock_cli_api.get(MESSAGES_ENDPOINT).mock(
+        return_value=messages_response(items)
+    )
+
+    result = CliRunner().invoke(cli, ["devin", "messages", SESSION_ID])
+
+    assert result.exit_code != 0
+    assert "unexpected response" in result.output

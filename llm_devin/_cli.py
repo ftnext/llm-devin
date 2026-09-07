@@ -97,6 +97,12 @@ def _json_body(response: httpx2.Response, session_id: str) -> dict:
     return body
 
 
+def _require_fields(body: dict, fields: tuple[str, ...], session_id: str) -> dict:
+    if any(field not in body for field in fields):
+        raise _invalid_response_error(session_id)
+    return body
+
+
 def _get_session(client, org_id: str, session_id: str) -> dict:
     try:
         response = client.get(
@@ -105,7 +111,18 @@ def _get_session(client, org_id: str, session_id: str) -> dict:
         response.raise_for_status()
     except (httpx2.RequestError, httpx2.HTTPStatusError) as ex:
         raise _read_error(session_id, ex) from ex
-    return _json_body(response, session_id)
+    return _require_fields(
+        _json_body(response, session_id),
+        (
+            "session_id",
+            "url",
+            "status",
+            "created_at",
+            "updated_at",
+            "acus_consumed",
+        ),
+        session_id,
+    )
 
 
 def _get_messages(client, org_id: str, session_id: str) -> list[dict]:
@@ -126,6 +143,10 @@ def _get_messages(client, org_id: str, session_id: str) -> list[dict]:
         data = _json_body(response, session_id)
         if not isinstance(data.get("items"), list):
             raise _invalid_response_error(session_id)
+        for item in data["items"]:
+            if not isinstance(item, dict):
+                raise _invalid_response_error(session_id)
+            _require_fields(item, ("source", "message"), session_id)
         items.extend(data["items"])
         if not data.get("has_next_page"):
             break
@@ -179,7 +200,7 @@ def _echo_status(session: dict, latest: dict | None) -> None:
         for pull_request in pull_requests:
             state = pull_request.get("pr_state")
             state_suffix = f" ({state})" if state else ""
-            click.echo(f"  {pull_request['pr_url']}{state_suffix}")
+            click.echo(f"  {pull_request.get('pr_url')}{state_suffix}")
     else:
         click.echo("Pull requests: none")
     if latest is None:
