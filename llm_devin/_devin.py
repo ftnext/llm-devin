@@ -33,7 +33,7 @@ def parse_session_reference(value: str) -> str:
     candidate = value
     if "://" in value:
         parsed = urlparse(value)
-        if parsed.hostname != "app.devin.ai":
+        if parsed.scheme != "https" or parsed.hostname != "app.devin.ai":
             raise llm.ModelError(
                 f"Invalid Devin session URL: {value!r}"
                 f" (expected {SESSION_URL_BASE}<id>)"
@@ -224,9 +224,10 @@ class DevinModel(llm.KeyModel):
                         " Omit -c/--cid to send to the specified session,"
                         " or omit the session option to continue the conversation."
                     )
-                return state
+            else:
+                state = {"session_id": session_id, "end_cursor": None}
             print_immediately("Continuing Devin session:", session_url(session_id))
-            return {"session_id": session_id, "end_cursor": None}
+            return state
         if not self._has_history(conversation):
             return None
         state = self._state_from_responses(conversation)
@@ -246,7 +247,7 @@ class DevinModel(llm.KeyModel):
         else:
             reason = f"{type(ex).__name__}: {ex}"
         return llm.ModelError(
-            f"Could not send the message to Devin session {session_id}"
+            f"Could not reach Devin session {session_id}"
             f" ({session_url(session_id)}): {reason}."
             " The session may not exist, may have expired,"
             " or may not be accessible with this API key."

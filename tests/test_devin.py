@@ -1715,6 +1715,7 @@ def test_send_to_explicit_session_with_empty_conversation(
         "devin-123",
         "devin-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
         "https://example.com/sessions/" + SESSION_HEX,
+        "http://app.devin.ai/sessions/" + SESSION_HEX,
         "https://app.devin.ai/" + SESSION_HEX,
         "https://app.devin.ai/sessions/",
         "https://app.devin.ai/sessions/not-hex",
