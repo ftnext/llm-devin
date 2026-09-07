@@ -80,15 +80,32 @@ def _read_error(session_id: str, ex: Exception) -> click.ClickException:
     )
 
 
+def _invalid_response_error(session_id: str) -> click.ClickException:
+    return click.ClickException(
+        f"The Devin API returned an unexpected response for {session_id}"
+        f" ({session_url(session_id)})."
+    )
+
+
+def _json_body(response: httpx2.Response, session_id: str) -> dict:
+    try:
+        body = response.json()
+    except ValueError as ex:
+        raise _invalid_response_error(session_id) from ex
+    if not isinstance(body, dict):
+        raise _invalid_response_error(session_id)
+    return body
+
+
 def _get_session(client, org_id: str, session_id: str) -> dict:
     try:
         response = client.get(
             f"{API_BASE_URL}/organizations/{org_id}/sessions/{session_id}",
         )
         response.raise_for_status()
-        return response.json()
     except (httpx2.RequestError, httpx2.HTTPStatusError) as ex:
         raise _read_error(session_id, ex) from ex
+    return _json_body(response, session_id)
 
 
 def _get_messages(client, org_id: str, session_id: str) -> list[dict]:
@@ -106,7 +123,9 @@ def _get_messages(client, org_id: str, session_id: str) -> list[dict]:
             response.raise_for_status()
         except (httpx2.RequestError, httpx2.HTTPStatusError) as ex:
             raise _read_error(session_id, ex) from ex
-        data = response.json()
+        data = _json_body(response, session_id)
+        if not isinstance(data.get("items"), list):
+            raise _invalid_response_error(session_id)
         items.extend(data["items"])
         if not data.get("has_next_page"):
             break
@@ -149,7 +168,7 @@ def _echo_status(session: dict, latest: dict | None) -> None:
     if tags:
         click.echo(f"Tags: {', '.join(tags)}")
     structured_output = session.get("structured_output")
-    if structured_output:
+    if structured_output is not None:
         click.echo("Structured output:")
         click.echo(
             json.dumps(structured_output, indent=2, ensure_ascii=False)

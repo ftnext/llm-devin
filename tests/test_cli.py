@@ -339,6 +339,44 @@ def test_connection_failure(env, mock_cli_api):
     assert "ConnectError" in result.output
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx2.Response(200, text="not json"),
+        httpx2.Response(200, json=[]),
+        httpx2.Response(200, json={"end_cursor": None}),
+    ],
+    ids=["not-json", "not-object", "without-items"],
+)
+def test_malformed_messages_response(env, mock_cli_api, response):
+    mock_cli_api.get(MESSAGES_ENDPOINT).mock(return_value=response)
+
+    result = CliRunner().invoke(cli, ["devin", "messages", SESSION_ID])
+
+    assert result.exit_code != 0
+    assert "unexpected response" in result.output
+
+
+def test_malformed_session_response(env, mock_cli_api):
+    mock_cli_api.get(SESSION_ENDPOINT).mock(
+        return_value=httpx2.Response(200, text="not json")
+    )
+
+    result = CliRunner().invoke(cli, ["devin", "status", SESSION_ID])
+
+    assert result.exit_code != 0
+    assert "unexpected response" in result.output
+
+
+def test_status_shows_empty_structured_output(env, mock_cli_api):
+    mock_status(mock_cli_api, session=session_response(structured_output={}))
+
+    result = CliRunner().invoke(cli, ["devin", "status", SESSION_ID])
+
+    assert result.exit_code == 0, result.output
+    assert "Structured output:\n{}" in result.output
+
+
 def test_pagination_without_end_cursor(env, mock_cli_api):
     mock_cli_api.get(MESSAGES_ENDPOINT).mock(
         return_value=messages_response(
