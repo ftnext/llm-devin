@@ -1472,11 +1472,12 @@ def test_continue_conversation_loaded_from_llm_logs(
 
 
 def test_continue_conversation_without_session_id_does_not_create_session(
-    monkeypatch, mock_api
+    monkeypatch, mock_api, tmp_path
 ):
     from llm.parts import Message, TextPart
 
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
 
     sut = DevinModel()
     conversation = llm.Conversation(model=sut)
@@ -1511,6 +1512,7 @@ def test_legacy_responses_without_session_id_does_not_create_session(
     prev_response = MagicMock()
     prev_response.response_json = None
     conversation = MagicMock()
+    conversation.id = None
     conversation.responses = [prev_response]
     prompt = MagicMock()
     prompt.prompt = "Follow up"
@@ -1539,6 +1541,7 @@ def test_continue_after_other_model_turn_does_not_reuse_stale_session(
     db_path, conversation_id = _log_first_turn(monkeypatch, mock_api, tmp_path)
 
     other_model = llm.get_model("gpt-4o-mini")
+    other_model.key = "dummy-openai-key"
     other_conversation = llm.Conversation(model=other_model, id=conversation_id)
     other_response = other_conversation.prompt("Hi", stream=False)
     with patch.object(other_model, "execute", return_value=iter(["Other"])):
