@@ -59,7 +59,7 @@ llm -m devin -o session https://app.devin.ai/sessions/xxxxxxxxxxxxxxxxxxxxxxxxxx
 
 Before sending, `Continuing Devin session: <URL>` is printed. If the value is not a valid session ID/URL, or the session does not exist or is not accessible with your API key, the command fails without creating a new session. The session is recorded in the `llm` log, so you can keep going with `llm -c` afterwards.
 
-`session` cannot be combined with `-c`/`--cid` when that conversation already has history, because the destination would be ambiguous; such a command is rejected. Use `-c`/`--cid` alone to continue the logged conversation, or `-o session` alone to target a specific session.
+`session` cannot be combined with `-c`/`--cid` when that conversation already has history for a different (or unknown) Devin session, because the destination would be ambiguous; such a command is rejected. Use `-c`/`--cid` alone to continue the logged conversation, or `-o session` alone to target a specific session. If the logged conversation already belongs to the same session, the combination is allowed (this is what `llm chat -m devin -o session ...` does on every turn after the first).
 
 Start an interactive chat session:
 

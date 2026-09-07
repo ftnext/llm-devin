@@ -49,7 +49,7 @@ def parse_session_reference(value: str) -> str:
     if match is None:
         raise llm.ModelError(
             f"Invalid Devin session ID or URL: {value!r}"
-            " (expected devin-<32 hex chars> or"
+            " (expected devin-<32 hex chars>, <32 hex chars>, or"
             f" {SESSION_URL_BASE}<32 hex chars>)"
         )
     return f"devin-{match.group(1).lower()}"
@@ -212,14 +212,19 @@ class DevinModel(llm.KeyModel):
 
     def _get_previous_state(self, conversation, explicit_session) -> dict | None:
         if explicit_session is not None:
-            if self._has_history(conversation):
-                raise llm.ModelError(
-                    "The session option cannot be combined with -c/--cid"
-                    " on a conversation that already has history."
-                    " Omit -c/--cid to send to the specified session,"
-                    " or omit the session option to continue the conversation."
-                )
             session_id = parse_session_reference(explicit_session)
+            if self._has_history(conversation):
+                state = self._state_from_responses(conversation)
+                if state is None:
+                    state = self._state_from_logs_db(conversation)
+                if state is None or state["session_id"] != session_id:
+                    raise llm.ModelError(
+                        "The session option cannot be combined with -c/--cid"
+                        " on a conversation that already has history."
+                        " Omit -c/--cid to send to the specified session,"
+                        " or omit the session option to continue the conversation."
+                    )
+                return state
             print_immediately("Continuing Devin session:", session_url(session_id))
             return {"session_id": session_id, "end_cursor": None}
         if not self._has_history(conversation):
@@ -233,6 +238,19 @@ class DevinModel(llm.KeyModel):
                 " Please start a new conversation."
             )
         return state
+
+    @staticmethod
+    def _explicit_session_error(session_id, ex) -> llm.ModelError:
+        if isinstance(ex, httpx2.HTTPStatusError):
+            reason = f"HTTP {ex.response.status_code}"
+        else:
+            reason = f"{type(ex).__name__}: {ex}"
+        return llm.ModelError(
+            f"Could not send the message to Devin session {session_id}"
+            f" ({session_url(session_id)}): {reason}."
+            " The session may not exist, may have expired,"
+            " or may not be accessible with this API key."
+        )
 
     def _execute(self, prompt, stream, response, conversation, key):
         org_id = self._org_id()
@@ -254,13 +272,15 @@ class DevinModel(llm.KeyModel):
             )
 
             poll_state: dict = {"cursor": previous_state["end_cursor"]}
+            explicit = prompt.options.session is not None
 
             try:
                 self._collect_existing_event_ids(
                     client, org_id, session_id, poll_state, seen_event_ids,
                 )
-            except (httpx2.RequestError, httpx2.HTTPStatusError):
-                pass
+            except (httpx2.RequestError, httpx2.HTTPStatusError) as ex:
+                if explicit:
+                    raise self._explicit_session_error(session_id, ex) from ex
 
             try:
                 send_message_response = client.post(
@@ -270,14 +290,8 @@ class DevinModel(llm.KeyModel):
                 send_message_response.raise_for_status()
             except httpx2.HTTPStatusError as ex:
                 status_code = ex.response.status_code
-                explicit = prompt.options.session is not None
                 if explicit and status_code in {401, 403, 404, 410}:
-                    raise llm.ModelError(
-                        f"Could not send the message to Devin session {session_id}"
-                        f" ({session_url(session_id)}): HTTP {status_code}."
-                        " The session may not exist, may have expired,"
-                        " or may not be accessible with this API key."
-                    ) from ex
+                    raise self._explicit_session_error(session_id, ex) from ex
                 if status_code in {404, 410}:
                     raise llm.ModelError(
                         "The previous Devin session is invalid or expired. "

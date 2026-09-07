@@ -1745,15 +1745,23 @@ def test_invalid_session_reference_is_rejected_before_any_request(
     assert mock_api.calls == []
 
 
+def _mock_explicit_prefetch_ok(mock_api):
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={"items": [], "end_cursor": "cursor-1", "has_next_page": False},
+        )
+    )
+
+
 @pytest.mark.parametrize("status_code", [401, 403, 404, 410])
-def test_explicit_session_not_accessible_does_not_create_session(
+def test_explicit_session_send_not_accessible_does_not_create_session(
     monkeypatch, mock_api, status_code
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
-
-    mock_api.get(
-        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
-    ).mock(return_value=httpx2.Response(status_code, json={"detail": "nope"}))
+    _mock_explicit_prefetch_ok(mock_api)
     mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
         json__eq={"message": "Hello again"},
@@ -1763,14 +1771,13 @@ def test_explicit_session_not_accessible_does_not_create_session(
     prompt = MagicMock()
     prompt.prompt = "Hello again"
     prompt.options = DevinModel.Options(session=SESSION_ID)
-    response = MagicMock()
 
     with pytest.raises(llm.ModelError) as excinfo:
         list(
             sut.execute(
                 prompt,
                 stream=False,
-                response=response,
+                response=MagicMock(),
                 conversation=None,
                 key=API_KEY,
             )
@@ -1785,14 +1792,75 @@ def test_explicit_session_not_accessible_does_not_create_session(
     )
 
 
-def test_explicit_session_server_error_does_not_create_session(
+@pytest.mark.parametrize("status_code", [401, 403, 404, 410, 500])
+def test_explicit_session_prefetch_failure_does_not_send_or_create(
+    monkeypatch, mock_api, status_code
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+    ).mock(return_value=httpx2.Response(status_code, json={"detail": "nope"}))
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=SESSION_ID)
+
+    with pytest.raises(llm.ModelError) as excinfo:
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=None,
+                key=API_KEY,
+            )
+        )
+
+    assert SESSION_URL in str(excinfo.value)
+    assert str(status_code) in str(excinfo.value)
+    assert not any(c.method == "POST" for c in mock_api.calls)
+
+
+def test_explicit_session_prefetch_network_error_does_not_send(
     monkeypatch, mock_api
 ):
     monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
 
-    mock_api.get(
+    route = mock_api.get(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
-    ).mock(return_value=httpx2.Response(500))
+    )
+
+    def raise_connect_error(request):
+        route.called = True
+        raise httpx2.ConnectError("boom", request=request)
+
+    route.respond = raise_connect_error
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Hello again"
+    prompt.options = DevinModel.Options(session=SESSION_ID)
+
+    with pytest.raises(llm.ModelError, match="ConnectError"):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=None,
+                key=API_KEY,
+            )
+        )
+
+    assert not any(c.method == "POST" for c in mock_api.calls)
+
+
+def test_explicit_session_send_server_error_does_not_create_session(
+    monkeypatch, mock_api
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    _mock_explicit_prefetch_ok(mock_api)
     mock_api.post(
         f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
         json__eq={"message": "Hello again"},
@@ -1818,6 +1886,79 @@ def test_explicit_session_server_error_does_not_create_session(
         c.method == "POST" and str(c.url).endswith("/sessions")
         for c in mock_api.calls
     )
+
+
+def test_explicit_session_chat_second_turn_continues_same_session(
+    monkeypatch, mock_api
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    _mock_explicit_session(mock_api)
+
+    sut = DevinModel()
+    conversation = llm.Conversation(model=sut)
+    first = conversation.prompt(
+        "Hello again", key=API_KEY, stream=False, session=SESSION_URL
+    )
+    assert first.text() == "New answer"
+    assert first.response_json["end_cursor"] == "cursor-2"
+
+    mock_api.routes.clear()
+    mock_api.calls.clear()
+    mock_api.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+        json__eq={"message": "Second"},
+    ).mock(return_value=httpx2.Response(200, json={}))
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}",
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "session_id": SESSION_ID,
+                "status": "running",
+                "status_detail": "finished",
+            },
+        )
+    )
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/{SESSION_ID}/messages",
+    ).mock(
+        side_effect=[
+            httpx2.Response(
+                200,
+                json={"items": [], "end_cursor": "cursor-2", "has_next_page": False},
+            ),
+            httpx2.Response(
+                200,
+                json={
+                    "items": [
+                        {
+                            "event_id": "evt-3",
+                            "source": "devin",
+                            "message": "Second answer",
+                            "created_at": 3000,
+                        },
+                    ],
+                    "end_cursor": "cursor-3",
+                    "has_next_page": False,
+                },
+            ),
+        ]
+    )
+
+    second = conversation.prompt(
+        "Second", key=API_KEY, stream=False, session=SESSION_URL
+    )
+    assert second.text() == "Second answer"
+    assert second.response_json == {
+        "session_id": SESSION_ID,
+        "end_cursor": "cursor-3",
+    }
+    first_messages_get = next(
+        c for c in mock_api.calls
+        if c.method == "GET" and "/messages" in str(c.url)
+    )
+    assert first_messages_get.url.params.get("after") == "cursor-2"
 
 
 def test_explicit_session_with_conversation_history_is_rejected(
