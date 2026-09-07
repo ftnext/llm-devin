@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx2
 import llm
@@ -21,6 +23,40 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 TIMEOUT = httpx2.Timeout(5.0, read=10.0)
+
+SESSION_URL_BASE = "https://app.devin.ai/sessions/"
+SESSION_ID_PATTERN = re.compile(r"^(?:devin-)?([0-9a-fA-F]{32})$")
+
+
+def parse_session_reference(value: str) -> str:
+    value = value.strip()
+    candidate = value
+    if "://" in value:
+        parsed = urlparse(value)
+        if parsed.scheme != "https" or parsed.hostname != "app.devin.ai":
+            raise llm.ModelError(
+                f"Invalid Devin session URL: {value!r}"
+                f" (expected {SESSION_URL_BASE}<id>)"
+            )
+        segments = [s for s in parsed.path.split("/") if s]
+        if len(segments) != 2 or segments[0] != "sessions":
+            raise llm.ModelError(
+                f"Invalid Devin session URL: {value!r}"
+                f" (expected {SESSION_URL_BASE}<id>)"
+            )
+        candidate = segments[1]
+    match = SESSION_ID_PATTERN.match(candidate)
+    if match is None:
+        raise llm.ModelError(
+            f"Invalid Devin session ID or URL: {value!r}"
+            " (expected devin-<32 hex chars>, <32 hex chars>, or"
+            f" {SESSION_URL_BASE}<32 hex chars>)"
+        )
+    return f"devin-{match.group(1).lower()}"
+
+
+def session_url(session_id: str) -> str:
+    return SESSION_URL_BASE + session_id.removeprefix("devin-")
 
 
 def create_http_client(headers: dict[str, str]) -> httpx2.Client:
@@ -70,6 +106,11 @@ class DevinModel(llm.KeyModel):
             " (normal, fast, lite, ultra, fusion)",
             default=None,
             pattern="^(normal|fast|lite|ultra|fusion)$",
+        )
+        session: Optional[str] = Field(
+            description="Existing Devin session ID or URL to send the message to"
+            " (cannot be combined with -c/--cid on a conversation with history)",
+            default=None,
         )
 
     def __init__(self) -> None:
@@ -169,7 +210,24 @@ class DevinModel(llm.KeyModel):
         response_json = LogStore(db).turn_response_json(row["id"])
         return self._state_from_response_json(response_json)
 
-    def _get_previous_state(self, conversation) -> dict | None:
+    def _get_previous_state(self, conversation, explicit_session) -> dict | None:
+        if explicit_session is not None:
+            session_id = parse_session_reference(explicit_session)
+            if self._has_history(conversation):
+                state = self._state_from_responses(conversation)
+                if state is None:
+                    state = self._state_from_logs_db(conversation)
+                if state is None or state["session_id"] != session_id:
+                    raise llm.ModelError(
+                        "The session option cannot be combined with -c/--cid"
+                        " on a conversation that already has history."
+                        " Omit -c/--cid to send to the specified session,"
+                        " or omit the session option to continue the conversation."
+                    )
+            else:
+                state = {"session_id": session_id, "end_cursor": None}
+            print_immediately("Continuing Devin session:", session_url(session_id))
+            return state
         if not self._has_history(conversation):
             return None
         state = self._state_from_responses(conversation)
@@ -182,6 +240,19 @@ class DevinModel(llm.KeyModel):
             )
         return state
 
+    @staticmethod
+    def _explicit_session_error(session_id, ex) -> llm.ModelError:
+        if isinstance(ex, httpx2.HTTPStatusError):
+            reason = f"HTTP {ex.response.status_code}"
+        else:
+            reason = f"{type(ex).__name__}: {ex}"
+        return llm.ModelError(
+            f"Could not reach Devin session {session_id}"
+            f" ({session_url(session_id)}): {reason}."
+            " The session may not exist, may have expired,"
+            " or may not be accessible with this API key."
+        )
+
     def _execute(self, prompt, stream, response, conversation, key):
         org_id = self._org_id()
         headers = {"Authorization": f"Bearer {key}"}
@@ -189,7 +260,9 @@ class DevinModel(llm.KeyModel):
             yield from self._run(client, prompt, response, conversation, org_id)
 
     def _run(self, client, prompt, response, conversation, org_id):
-        previous_state = self._get_previous_state(conversation)
+        previous_state = self._get_previous_state(
+            conversation, prompt.options.session
+        )
 
         seen_event_ids: set[str] = set()
 
@@ -200,13 +273,15 @@ class DevinModel(llm.KeyModel):
             )
 
             poll_state: dict = {"cursor": previous_state["end_cursor"]}
+            explicit = prompt.options.session is not None
 
             try:
                 self._collect_existing_event_ids(
                     client, org_id, session_id, poll_state, seen_event_ids,
                 )
-            except (httpx2.RequestError, httpx2.HTTPStatusError):
-                pass
+            except (httpx2.RequestError, httpx2.HTTPStatusError) as ex:
+                if explicit:
+                    raise self._explicit_session_error(session_id, ex) from ex
 
             try:
                 send_message_response = client.post(
@@ -215,7 +290,10 @@ class DevinModel(llm.KeyModel):
                     )
                 send_message_response.raise_for_status()
             except httpx2.HTTPStatusError as ex:
-                if ex.response.status_code in {404, 410}:
+                status_code = ex.response.status_code
+                if explicit and status_code in {401, 403, 404, 410}:
+                    raise self._explicit_session_error(session_id, ex) from ex
+                if status_code in {404, 410}:
                     raise llm.ModelError(
                         "The previous Devin session is invalid or expired. "
                         "Please start a new conversation."
