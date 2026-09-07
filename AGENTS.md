@@ -7,7 +7,9 @@
 - **`devin`**: Interacts with the [Devin API (v3)](https://docs.devin.ai/api-reference/overview) to create sessions and stream messages.
 - **`deepwiki`**: Queries repositories via the [DeepWiki MCP server](https://mcp.deepwiki.com).
 
-Package structure: `llm_devin/` with `_devin.py` (Devin API model), `_deepwiki.py` (DeepWiki MCP model), and `__init__.py` (plugin registration + re-exports).
+It also adds a `llm devin` command group (`status`, `messages`) through the `register_commands` hook to read an existing session read-only.
+
+Package structure: `llm_devin/` with `_devin.py` (Devin API model), `_deepwiki.py` (DeepWiki MCP model), `_cli.py` (`llm devin` commands), and `__init__.py` (plugin registration + re-exports).
 
 ## Setup
 
@@ -21,7 +23,7 @@ uv sync --extra test
 uv run pytest
 ```
 
-Tests mock HTTP calls with `httpx2.MockTransport` (via the `mock_api` fixture, which patches `create_http_client`) and `monkeypatch` to set environment variables.
+Tests mock HTTP calls with `httpx2.MockTransport` and `monkeypatch` to set environment variables. `tests/conftest.py` provides `mock_api` (patches `llm_devin._devin.create_http_client`) and `mock_cli_api` (patches `llm_devin._cli.create_http_client`); both fail the test on unmocked requests.
 
 ## Code Conventions
 
