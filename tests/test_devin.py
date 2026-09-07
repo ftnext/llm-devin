@@ -160,7 +160,7 @@ def test_execute_flow(monkeypatch, mock_api):
             prompt,
             stream=False,
             response=MagicMock(),
-            conversation=MagicMock(),
+            conversation=llm.Conversation(model=sut),
             key=API_KEY,
         )
     )
@@ -230,7 +230,7 @@ def test_execute_flow_exit_status(monkeypatch, mock_api):
             prompt,
             stream=False,
             response=MagicMock(),
-            conversation=MagicMock(),
+            conversation=llm.Conversation(model=sut),
             key=API_KEY,
         )
     )
@@ -296,7 +296,7 @@ def test_create_session_with_options(monkeypatch, mock_api):
             prompt,
             stream=False,
             response=MagicMock(),
-            conversation=MagicMock(),
+            conversation=llm.Conversation(model=sut),
             key=API_KEY,
         )
     )
@@ -376,7 +376,7 @@ def test_execute_flow_multi_page_messages(monkeypatch, mock_api):
             prompt,
             stream=False,
             response=MagicMock(),
-            conversation=MagicMock(),
+            conversation=llm.Conversation(model=sut),
             key=API_KEY,
         )
     )
@@ -398,7 +398,7 @@ def test_execute_requires_org_id(monkeypatch):
                 prompt,
                 stream=False,
                 response=MagicMock(),
-                conversation=MagicMock(),
+                conversation=llm.Conversation(model=sut),
                 key=API_KEY,
             )
         )
@@ -479,7 +479,7 @@ def test_debug_logging_creates_jsonl_file(monkeypatch, mock_api, tmp_path):
             prompt,
             stream=False,
             response=MagicMock(),
-            conversation=MagicMock(),
+            conversation=llm.Conversation(model=sut),
             key=API_KEY,
         )
     )
@@ -576,7 +576,7 @@ def test_no_debug_logging_when_debug_option_is_false(
             prompt,
             stream=False,
             response=MagicMock(),
-            conversation=MagicMock(),
+            conversation=llm.Conversation(model=sut),
             key=API_KEY,
         )
     )
@@ -640,7 +640,7 @@ def test_debug_logging_preserves_non_ascii(monkeypatch, mock_api, tmp_path):
             prompt,
             stream=False,
             response=MagicMock(),
-            conversation=MagicMock(),
+            conversation=llm.Conversation(model=sut),
             key=API_KEY,
         )
     )
@@ -744,7 +744,7 @@ def test_duplicate_messages_are_deduplicated(monkeypatch, mock_api):
                 prompt,
                 stream=False,
                 response=MagicMock(),
-                conversation=MagicMock(),
+                conversation=llm.Conversation(model=sut),
                 key=API_KEY,
             )
         )
@@ -1307,3 +1307,224 @@ def test_collect_existing_event_ids_pagination_error(monkeypatch, mock_api):
 def test_devin_mode_rejects_unknown_value():
     with pytest.raises(ValueError):
         DevinModel.Options(devin_mode="turbo")
+
+
+def _mock_first_session(mock_api, prompt_text="Hello"):
+    mock_api.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions",
+        json__eq={"prompt": prompt_text},
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "url": "https://app.devin.ai/sessions/devin-test-session",
+                "status": "running",
+            },
+        )
+    )
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "running",
+                "status_detail": "finished",
+            },
+        )
+    )
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "event_id": "evt-1",
+                        "source": "devin",
+                        "message": "First answer",
+                        "created_at": 1000,
+                    },
+                ],
+                "end_cursor": "cursor-1",
+                "has_next_page": False,
+            },
+        )
+    )
+
+
+def _mock_follow_up(mock_api, message="Follow up"):
+    mock_api.post(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+        json__eq={"message": message},
+    ).mock(return_value=httpx2.Response(200, json={}))
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session",
+    ).mock(
+        return_value=httpx2.Response(
+            200,
+            json={
+                "session_id": "devin-test-session",
+                "status": "running",
+                "status_detail": "finished",
+            },
+        )
+    )
+    prefetch_response = httpx2.Response(
+        200,
+        json={"items": [], "end_cursor": "cursor-1", "has_next_page": False},
+    )
+    poll_response = httpx2.Response(
+        200,
+        json={
+            "items": [
+                {
+                    "event_id": "evt-3",
+                    "source": "devin",
+                    "message": "Follow-up answer",
+                    "created_at": 2000,
+                },
+            ],
+            "end_cursor": "cursor-2",
+            "has_next_page": False,
+        },
+    )
+    mock_api.get(
+        f"{BASE_URL}/organizations/{ORG_ID}/sessions/devin-test-session/messages",
+    ).mock(side_effect=[prefetch_response, poll_response])
+
+
+def _log_first_turn(monkeypatch, mock_api, tmp_path):
+    from sqlite_utils import Database
+    from llm.migrations import migrate
+
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+    monkeypatch.setattr(llm, "user_dir", lambda: tmp_path)
+    db_path = tmp_path / "logs.db"
+    db = Database(db_path)
+    migrate(db)
+
+    _mock_first_session(mock_api)
+    model = DevinModel()
+    conversation = llm.Conversation(model=model)
+    response = conversation.prompt("Hello", key=API_KEY, stream=False)
+    assert response.text() == "First answer"
+    response.log_to_db(db)
+    assert response.response_json == {
+        "session_id": "devin-test-session",
+        "end_cursor": "cursor-1",
+    }
+    return db_path, conversation.id
+
+
+@pytest.mark.parametrize("use_cid", [True, False], ids=["--cid", "-c"])
+def test_continue_conversation_loaded_from_llm_logs(
+    monkeypatch, mock_api, tmp_path, use_cid
+):
+    from llm.cli import load_conversation
+
+    db_path, conversation_id = _log_first_turn(monkeypatch, mock_api, tmp_path)
+
+    loaded = load_conversation(
+        conversation_id if use_cid else None, database=str(db_path)
+    )
+    assert loaded.id == conversation_id
+    assert loaded.responses == []
+    assert loaded.loaded_messages
+
+    mock_api.routes.clear()
+    mock_api.calls.clear()
+    _mock_follow_up(mock_api)
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options = DevinModel.Options()
+    response = MagicMock()
+
+    actual = list(
+        sut.execute(
+            prompt,
+            stream=False,
+            response=response,
+            conversation=loaded,
+            key=API_KEY,
+        )
+    )
+
+    assert actual == ["Follow-up answer"]
+    assert response.response_json == {
+        "session_id": "devin-test-session",
+        "end_cursor": "cursor-2",
+    }
+    assert not any(
+        c.method == "POST" and str(c.url).endswith("/sessions")
+        for c in mock_api.calls
+    )
+    first_messages_get = next(
+        c for c in mock_api.calls
+        if c.method == "GET" and "/messages" in str(c.url)
+    )
+    assert first_messages_get.url.params.get("after") == "cursor-1"
+
+
+def test_continue_conversation_without_session_id_does_not_create_session(
+    monkeypatch, mock_api
+):
+    from llm.parts import Message, TextPart
+
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    sut = DevinModel()
+    conversation = llm.Conversation(model=sut)
+    conversation.loaded_messages = [
+        Message(role="user", parts=[TextPart(text="Hello")]),
+        Message(role="assistant", parts=[TextPart(text="First answer")]),
+    ]
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options = DevinModel.Options()
+
+    with pytest.raises(llm.ModelError, match="Could not find the Devin session ID"):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=conversation,
+                key=API_KEY,
+            )
+        )
+
+    assert mock_api.calls == []
+
+
+def test_legacy_responses_without_session_id_does_not_create_session(
+    monkeypatch, mock_api
+):
+    monkeypatch.setenv("LLM_DEVIN_ORG_ID", ORG_ID)
+
+    sut = DevinModel()
+    prev_response = MagicMock()
+    prev_response.response_json = None
+    conversation = MagicMock()
+    conversation.responses = [prev_response]
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options = DevinModel.Options()
+
+    with pytest.raises(llm.ModelError, match="Could not find the Devin session ID"):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=conversation,
+                key=API_KEY,
+            )
+        )
+
+    assert mock_api.calls == []

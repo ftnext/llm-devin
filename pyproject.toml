@@ -28,6 +28,7 @@ dependencies = [
     "happy-python-logging",
     "python-json-logger",
     "mcp",
+    "sqlite-utils>=3.38",
 ]
 
 [build-system]
