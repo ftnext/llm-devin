@@ -148,10 +148,13 @@ def _get_messages(client, org_id: str, session_id: str) -> list[dict]:
                 raise _invalid_response_error(session_id)
             _require_fields(item, ("source", "message"), session_id)
         items.extend(data["items"])
-        if not data.get("has_next_page"):
+        has_next_page = data.get("has_next_page")
+        if not isinstance(has_next_page, bool):
+            raise _invalid_response_error(session_id)
+        if not has_next_page:
             break
         cursor = data.get("end_cursor")
-        if cursor is None:
+        if not isinstance(cursor, str) or not cursor:
             raise click.ClickException(
                 "The Devin API reported another page of messages"
                 " without an end_cursor."

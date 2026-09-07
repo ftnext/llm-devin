@@ -345,8 +345,18 @@ def test_connection_failure(env, mock_cli_api):
         httpx2.Response(200, text="not json"),
         httpx2.Response(200, json=[]),
         httpx2.Response(200, json={"end_cursor": None}),
+        httpx2.Response(200, json={"items": [], "end_cursor": None}),
+        httpx2.Response(
+            200, json={"items": [], "end_cursor": None, "has_next_page": "no"}
+        ),
     ],
-    ids=["not-json", "not-object", "without-items"],
+    ids=[
+        "not-json",
+        "not-object",
+        "without-items",
+        "without-has-next-page",
+        "non-boolean-has-next-page",
+    ],
 )
 def test_malformed_messages_response(env, mock_cli_api, response):
     mock_cli_api.get(MESSAGES_ENDPOINT).mock(return_value=response)
@@ -425,3 +435,19 @@ def test_messages_response_missing_field(env, mock_cli_api, items):
 
     assert result.exit_code != 0
     assert "unexpected response" in result.output
+
+
+@pytest.mark.parametrize("end_cursor", [None, "", 1], ids=["null", "empty", "int"])
+def test_pagination_with_unusable_end_cursor(env, mock_cli_api, end_cursor):
+    mock_cli_api.get(MESSAGES_ENDPOINT).mock(
+        return_value=messages_response(
+            [message("evt-1", "devin", "Answer", 1000)],
+            end_cursor=end_cursor,
+            has_next_page=True,
+        )
+    )
+
+    result = CliRunner().invoke(cli, ["devin", "messages", SESSION_ID])
+
+    assert result.exit_code != 0
+    assert "without an end_cursor" in result.output
