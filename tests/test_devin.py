@@ -1528,3 +1528,44 @@ def test_legacy_responses_without_session_id_does_not_create_session(
         )
 
     assert mock_api.calls == []
+
+
+def test_continue_after_other_model_turn_does_not_reuse_stale_session(
+    monkeypatch, mock_api, tmp_path
+):
+    from llm.cli import load_conversation
+    from sqlite_utils import Database
+
+    db_path, conversation_id = _log_first_turn(monkeypatch, mock_api, tmp_path)
+
+    other_model = llm.get_model("gpt-4o-mini")
+    other_conversation = llm.Conversation(model=other_model, id=conversation_id)
+    other_response = other_conversation.prompt("Hi", stream=False)
+    with patch.object(other_model, "execute", return_value=iter(["Other"])):
+        assert other_response.text() == "Other"
+    other_response.log_to_db(Database(db_path))
+
+    loaded = load_conversation(conversation_id, database=str(db_path))
+    assert loaded.responses == []
+    assert loaded.loaded_messages
+
+    mock_api.routes.clear()
+    mock_api.calls.clear()
+
+    sut = DevinModel()
+    prompt = MagicMock()
+    prompt.prompt = "Follow up"
+    prompt.options = DevinModel.Options()
+
+    with pytest.raises(llm.ModelError, match="Could not find the Devin session ID"):
+        list(
+            sut.execute(
+                prompt,
+                stream=False,
+                response=MagicMock(),
+                conversation=loaded,
+                key=API_KEY,
+            )
+        )
+
+    assert mock_api.calls == []

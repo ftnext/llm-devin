@@ -159,12 +159,12 @@ class DevinModel(llm.KeyModel):
         if "turns" not in db.table_names():
             return None
         rows = db.query(
-            "select id from turns where thread_id = ? and model = ?"
+            "select id, model from turns where thread_id = ?"
             " order by id desc limit 1",
-            [conversation_id, self.model_id],
+            [conversation_id],
         )
         row = next(iter(rows), None)
-        if row is None:
+        if row is None or row["model"] != self.model_id:
             return None
         response_json = LogStore(db).turn_response_json(row["id"])
         return self._state_from_response_json(response_json)
