@@ -87,6 +87,16 @@ def test_error_status(mock_api):
         execute()
 
 
+BOOL_SCHEMA = {"type": "object", "properties": {"name": {"enum": [False]}}}
+
+
+def test_schema_with_numeric_enum_is_not_bool_enum(mock_api):
+    numeric = {"type": "object", "properties": {"name": {"enum": [0]}}}
+    with pytest.raises(llm.ModelError, match="cannot change.*schema"):
+        execute(schema=BOOL_SCHEMA, conversation=history(numeric))
+    assert mock_api.calls == []
+
+
 def history(schema=SCHEMA):
     return SimpleNamespace(responses=[SimpleNamespace(response_json={
         "session_id": SESSION_ID, "end_cursor": "old-cursor",
@@ -94,7 +104,10 @@ def history(schema=SCHEMA):
     })])
 
 
-@pytest.mark.parametrize("recorded", [None, {}, {"type": "array"}])
+@pytest.mark.parametrize("recorded", [
+    None, {}, {"type": "array"},
+    {"type": "object", "properties": {"name": {"enum": [0]}}},
+])
 def test_changed_schema_rejected_without_http(mock_api, recorded):
     with pytest.raises(llm.ModelError, match="cannot change.*schema"):
         execute(conversation=history(recorded))
@@ -110,8 +123,8 @@ def test_explicit_session_without_history_rejected(mock_api, capsys):
     assert "Continuing Devin session:" in captured.err
 
 
-def setup_continuation(api, final, *, schema_mode=True):
-    details = [{"status": "exit", "structured_output": {"name": "old"}},
+def setup_continuation(api, final, *, schema_mode=True, baseline={"name": "old"}):
+    details = [{"status": "exit", "structured_output": baseline},
                {"status": "exit", "structured_output": final}]
     api.get(SESSION).mock(side_effect=[reply(d) for d in details] if schema_mode
                           else [reply(details[-1])])
@@ -140,6 +153,18 @@ def test_stale_continuation(mock_api, final):
     setup_continuation(mock_api, final)
     with pytest.raises(llm.ModelError, match=f"No new structured output.*llm devin status {URL}"):
         execute(conversation=history())
+
+
+@pytest.mark.parametrize("baseline, final", [
+    ({"name": 0}, {"name": False}),
+    ({"name": {"nested": [1]}}, {"name": {"nested": [True]}}),
+    (0, False),
+])
+def test_bool_number_change_is_new_output(mock_api, baseline, final):
+    setup_continuation(mock_api, final, baseline=baseline)
+    chunks, metadata = execute(conversation=history())
+    assert chunks == [json.dumps(final)]
+    assert json.dumps(metadata["structured_output"]) == json.dumps(final)
 
 
 def test_continuation_without_schema(mock_api):

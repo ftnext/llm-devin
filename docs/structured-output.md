@@ -27,7 +27,7 @@ contains `session_id`, `end_cursor`, `structured_output_schema`, and
 ## Continuing a session
 
 Continue with `llm -c --schema 'title, risk int' "Follow up"` using exactly the
-same schema (dictionary equality) as the session was created with. The schema
+same schema as the session was created with. The schema
 must be recorded in local conversation history, including history loaded from
 the logs database. The Devin API has no documented endpoint to change a
 session's structured output schema after creation. A different or unrecorded
@@ -38,8 +38,12 @@ in plain text.
 
 For schema continuations the plugin reads the existing output before sending
 the message. If the final output is missing or unchanged, it raises an error
-rather than emitting stale JSON. Even an intentionally identical result is
-indistinguishable from stale output; inspect it with `llm devin status <url>`.
+rather than emitting stale JSON. Schemas and outputs are compared as
+canonical JSON (`json.dumps(..., sort_keys=True)`), so key order is ignored but
+JSON types are kept: `0` and `false` (also nested, e.g. `enum: [0]` vs
+`enum: [false]`) differ, and `1` vs `1.0` also count as different. A new result
+that is identical to the previous output is indistinguishable from stale
+output and raises; inspect it with `llm devin status <url>`.
 New sessions that end without structured output also raise an error including
 the status and session URL. An error-status session always raises, even if it
 has structured output. Empty objects, arrays, false, and zero are emitted;

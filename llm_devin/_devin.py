@@ -278,7 +278,7 @@ class DevinModel(llm.KeyModel):
             conversation, prompt.options.session, schema_mode=schema_mode
         )
         if previous_state is not None and schema_mode:
-            if previous_state.get("structured_output_schema") != schema:
+            if not self._same_json(previous_state.get("structured_output_schema"), schema):
                 raise llm.ModelError(
                     "The Devin API cannot change a session's structured output schema"
                     " after creation; start a new conversation with --schema, or"
@@ -390,7 +390,7 @@ class DevinModel(llm.KeyModel):
                     f"Devin session ended with status={status},"
                     f" status_detail={status_detail} ({location})."
                 )
-            if previous_state is not None and (value is None or value == baseline):
+            if previous_state is not None and (value is None or self._same_json(value, baseline)):
                 raise llm.ModelError(
                     "No new structured output was produced for this turn;"
                     f" run llm devin status {location} to inspect."
@@ -404,6 +404,10 @@ class DevinModel(llm.KeyModel):
                 structured_output_schema=schema, structured_output=value,
             )
             yield json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
+    def _same_json(left, right) -> bool:
+        return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
 
     @staticmethod
     def _split_csv(value: str | None) -> list[str] | None:
