@@ -13,7 +13,13 @@ __all__ = [
     "DeepWikiModel",
     "DevinModel",
     "register_commands",
+    "register_tools",
 ]
+
+if hasattr(llm, "Toolbox"):
+    from llm_devin._tools import Devin
+
+    __all__.append("Devin")
 
 # Suppress "Unknown SSE event: ping" from DeepWiki MCP server.
 # ref: https://github.com/modelcontextprotocol/python-sdk/blob/v1.9.2/src/mcp/client/sse.py#L113-L116
@@ -26,3 +32,8 @@ _mcp_sse_logger.propagate = False
 def register_models(register):
     register(DevinModel())
     register(DeepWikiModel())
+
+
+@llm.hookimpl
+def register_tools(register):
+    register(Devin)

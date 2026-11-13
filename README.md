@@ -91,6 +91,15 @@ llm devin messages devin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --json
 
 With `--json`, only JSON is written to standard output, so it can be piped into `jq` or another script. Invalid session IDs/URLs, a missing key or organization ID, sessions that are not accessible, and API or network failures are reported on standard error and exit with a non-zero status.
 
+### Delegating to Devin from other models
+
+A `Devin` toolbox lets a tool-capable model start a cloud Devin session (returns the session URL immediately, with a bounded `max_acu_limit`) and read its status and messages read-only. See [docs/delegation-tools.md](docs/delegation-tools.md).
+
+```bash
+llm -m gpt-4.1-mini -T 'Devin(max_acu_limit=3, devin_mode="fusion")' --td --ta \
+  "Ask Devin to add a regression test for issue #12 in owner/repo and give me the session URL"
+```
+
 ### DeepWiki
 
 ```bash
