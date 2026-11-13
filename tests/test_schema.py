@@ -149,9 +149,46 @@ def test_same_schema_continuation(mock_api):
 
 
 @pytest.mark.parametrize("final", [{"name": "old"}, None])
-def test_stale_continuation(mock_api, final):
-    setup_continuation(mock_api, final)
+def test_stale_continuation(mock_api, monkeypatch, final):
+    monkeypatch.setattr(DevinModel, "STALE_OUTPUT_POLLS", 2)
+    stale = {"status": "exit", "structured_output": final}
+    mock_api.get(SESSION).mock(side_effect=[
+        reply({"status": "exit", "structured_output": {"name": "old"}}),
+        reply(stale), reply(stale), reply(stale),
+    ])
+    mock_api.get(SESSION + "/messages").mock(
+        return_value=reply({"items": [], "end_cursor": "old-cursor"}))
+    mock_api.post(SESSION + "/messages").mock(return_value=reply({}))
     with pytest.raises(llm.ModelError, match=f"No new structured output.*llm devin status {URL}"):
+        execute(conversation=history())
+    assert len([c for c in mock_api.calls if c.method == "GET" and str(c.url) == SESSION]) == 4
+
+
+def test_continuation_waits_past_previous_turn_snapshot(mock_api):
+    old = {"name": "old"}
+    mock_api.get(SESSION).mock(side_effect=[reply(d) for d in [
+        {"status": "running", "status_detail": "finished", "structured_output": old},
+        {"status": "running", "status_detail": "finished", "structured_output": old},
+        {"status": "running", "status_detail": "working", "structured_output": old},
+        {"status": "running", "status_detail": "finished", "structured_output": {"name": "new"}},
+    ]])
+    mock_api.get(SESSION + "/messages").mock(
+        return_value=reply({"items": [], "end_cursor": "old-cursor"}))
+    mock_api.post(SESSION + "/messages").mock(return_value=reply({}))
+    chunks, metadata = execute(conversation=history())
+    assert chunks == ['{"name": "new"}']
+    assert metadata["structured_output"] == {"name": "new"}
+
+
+def test_error_status_does_not_wait_for_new_output(mock_api):
+    mock_api.get(SESSION).mock(side_effect=[
+        reply({"status": "exit", "structured_output": {"name": "old"}}),
+        reply({"status": "error", "structured_output": {"name": "old"}}),
+    ])
+    mock_api.get(SESSION + "/messages").mock(
+        return_value=reply({"items": [], "end_cursor": "old-cursor"}))
+    mock_api.post(SESSION + "/messages").mock(return_value=reply({}))
+    with pytest.raises(llm.ModelError, match="status=error"):
         execute(conversation=history())
 
 

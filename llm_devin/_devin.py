@@ -89,6 +89,7 @@ class DevinModel(llm.KeyModel):
     supports_schema = True
 
     BASE_URL = API_BASE_URL
+    STALE_OUTPUT_POLLS = 12
 
     class Options(llm.Options):
         debug: Optional[bool] = Field(
@@ -345,6 +346,7 @@ class DevinModel(llm.KeyModel):
             poll_state = {"cursor": None}
 
         devin_messages: list[str] = []
+        stale_polls = 0
         while True:
             try:
                 session_detail = self._get_session(client, org_id, session_id)
@@ -365,14 +367,24 @@ class DevinModel(llm.KeyModel):
 
                 status = session_detail["status"]
                 status_detail = session_detail.get("status_detail")
-                if status in {"exit", "error", "suspended"}:
-                    break
-                if status == "running" and status_detail in {
-                    "finished",
-                    "waiting_for_user",
-                    "waiting_for_approval",
-                }:
-                    break
+                terminal = status in {"exit", "error", "suspended"} or (
+                    status == "running" and status_detail in {
+                        "finished",
+                        "waiting_for_user",
+                        "waiting_for_approval",
+                    }
+                )
+                if terminal:
+                    if (
+                        schema_mode
+                        and previous_state is not None
+                        and status != "error"
+                        and stale_polls < self.STALE_OUTPUT_POLLS
+                        and self._is_stale(session_detail.get("structured_output"), baseline)
+                    ):
+                        stale_polls += 1
+                    else:
+                        break
             time.sleep(5)
 
         response.response_json = {
@@ -390,7 +402,7 @@ class DevinModel(llm.KeyModel):
                     f"Devin session ended with status={status},"
                     f" status_detail={status_detail} ({location})."
                 )
-            if previous_state is not None and (value is None or self._same_json(value, baseline)):
+            if previous_state is not None and self._is_stale(value, baseline):
                 raise llm.ModelError(
                     "No new structured output was produced for this turn;"
                     f" run llm devin status {location} to inspect."
@@ -408,6 +420,10 @@ class DevinModel(llm.KeyModel):
     @staticmethod
     def _same_json(left, right) -> bool:
         return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+    @classmethod
+    def _is_stale(cls, value, baseline) -> bool:
+        return value is None or cls._same_json(value, baseline)
 
     @staticmethod
     def _split_csv(value: str | None) -> list[str] | None:

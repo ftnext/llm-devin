@@ -37,8 +37,10 @@ Start a new conversation with `--schema` instead, or omit `--schema` to continue
 in plain text.
 
 For schema continuations the plugin reads the existing output before sending
-the message. If the final output is missing or unchanged, it raises an error
-rather than emitting stale JSON. Schemas and outputs are compared as
+the message. Because the session can still report the previous turn's finished
+state right after the message is sent, an unchanged output at a finished state
+is re-polled for up to about a minute (12 polls). If the output is still missing
+or unchanged, it raises an error rather than emitting stale JSON. Schemas and outputs are compared as
 canonical JSON (`json.dumps(..., sort_keys=True)`), so key order is ignored but
 JSON types are kept: `0` and `false` (also nested, e.g. `enum: [0]` vs
 `enum: [false]`) differ, and `1` vs `1.0` also count as different. A new result
