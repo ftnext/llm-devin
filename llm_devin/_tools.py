@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 
 import httpx2
 import llm
@@ -200,6 +201,7 @@ class Devin(llm.Toolbox):
             raise ValueError(f"Devin toolbox: {ex}") from None
         self._started: list[str] = []
         self._attempts = 0
+        self._budget_lock = threading.Lock()
 
     def start_session(
         self,
@@ -232,20 +234,13 @@ class Devin(llm.Toolbox):
             raise DevinToolError(
                 f"prompt must be at most {MAX_PROMPT_CHARS} characters"
             )
-        if self._attempts >= self._max_sessions:
-            started = ", ".join(self._started) or "none confirmed"
-            raise DevinToolError(
-                f"This Devin toolbox may start at most {self._max_sessions}"
-                f" session(s) (started: {started})."
-                " Use Devin_session_status or Devin_session_messages instead."
-            )
         limit = self._max_acu_limit
         if max_acu_limit is not None:
             limit = _bounded_int(
                 max_acu_limit, "max_acu_limit", 1, self._max_acu_limit
             )
         mode = self._devin_mode
-        if devin_mode:
+        if devin_mode is not None:
             _validate_mode(devin_mode)
             if mode is not None and devin_mode != mode:
                 raise DevinToolError(
@@ -267,7 +262,7 @@ class Devin(llm.Toolbox):
             request_json["title"] = title.strip()[:MAX_TITLE_CHARS]
 
         with _Api() as api:
-            self._attempts += 1
+            self._reserve_session()
             try:
                 body = api.request(
                     "POST",
@@ -277,7 +272,8 @@ class Devin(llm.Toolbox):
                 )
             except DevinToolError as ex:
                 if ex.status_code is not None and 400 <= ex.status_code < 500:
-                    self._attempts -= 1
+                    with self._budget_lock:
+                        self._attempts -= 1
                 raise
         session_id = body.get("session_id")
         url = body.get("url")
@@ -286,7 +282,8 @@ class Devin(llm.Toolbox):
                 "Could not start a Devin session: unexpected response from"
                 " the Devin API. Check the Devin web app before retrying."
             )
-        self._started.append(session_id)
+        with self._budget_lock:
+            self._started.append(session_id)
         return {
             "session_id": session_id,
             "url": url,
@@ -298,6 +295,18 @@ class Devin(llm.Toolbox):
                 " the user. Check later with Devin_session_status."
             ),
         }
+
+    def _reserve_session(self) -> None:
+        with self._budget_lock:
+            if self._attempts >= self._max_sessions:
+                started = ", ".join(self._started) or "none confirmed"
+                raise DevinToolError(
+                    f"This Devin toolbox may start at most {self._max_sessions}"
+                    f" session(s) (started: {started})."
+                    " Use Devin_session_status or Devin_session_messages"
+                    " instead."
+                )
+            self._attempts += 1
 
     def session_status(self, session: str) -> dict:
         """

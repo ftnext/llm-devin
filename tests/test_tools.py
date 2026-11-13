@@ -1,4 +1,6 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx2
 import llm
@@ -7,7 +9,7 @@ from click.testing import CliRunner
 from llm.cli import cli
 from llm.plugins import pm
 
-from llm_devin import Devin
+from llm_devin import Devin, _devin
 
 API_KEY = "test-api-key"
 ORG_ID = "org-test123"
@@ -162,6 +164,7 @@ class TestStartSession:
             pytest.param({"prompt": "x" * 30001}, "prompt", id="prompt-too-long"),
             ({"prompt": "Task", "devin_mode": "ultra"}, "devin_mode"),
             ({"prompt": "Task", "devin_mode": "fast"}, "devin_mode"),
+            ({"prompt": "Task", "devin_mode": ""}, "devin_mode"),
             ({"prompt": "Task", "max_acu_limit": 6}, "between 1 and 5"),
             ({"prompt": "Task", "max_acu_limit": 0}, "between 1 and 5"),
             ({"prompt": "Task", "repos": "https://github.com/o/r"}, "owner/repo"),
@@ -190,6 +193,31 @@ class TestStartSession:
             toolbox.start_session("Task again")
 
         assert len(mock_api.calls) == 1
+
+    def test_concurrent_starts_respect_budget(self, monkeypatch, mock_api):
+        mock_api.post(SESSIONS_ENDPOINT).mock(return_value=created())
+        both_connecting = threading.Barrier(2, timeout=5)
+        create_http_client = _devin.create_http_client
+
+        def synchronized_client(headers):
+            both_connecting.wait()
+            return create_http_client(headers)
+
+        monkeypatch.setattr(_devin, "create_http_client", synchronized_client)
+        toolbox = Devin()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(toolbox.start_session, "Task") for _ in range(2)]
+            outcomes = []
+            for future in futures:
+                try:
+                    outcomes.append(future.result(timeout=10)["session_id"])
+                except Exception as ex:
+                    outcomes.append(str(ex))
+
+        assert len(mock_api.calls) == 1
+        assert SESSION_ID in outcomes
+        assert any("at most 1 session" in outcome for outcome in outcomes)
 
     def test_client_error_does_not_use_budget(self, mock_api):
         mock_api.post(SESSIONS_ENDPOINT).mock(
