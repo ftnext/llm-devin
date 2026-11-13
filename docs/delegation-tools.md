@@ -15,7 +15,8 @@ Tools require LLM 0.26 or later. With older versions the `devin` and `deepwiki` 
 
 The handoff is asynchronous: Devin works for minutes or hours, so the calling model is expected to report the session URL to you and check back later, not to wait.
 While the session is still working, `Devin_session_status` returns a `note` telling the model not to poll in a loop.
-Malformed API responses (for example a status without `status`, or a message page without a boolean `has_next_page`) are returned as errors rather than partial results.
+Malformed API responses (for example a status without `status`, or a message without `source`/`message`) are returned as errors rather than partial results.
+As a stricter completeness check than the published schema (like `llm devin messages`), every message page must also include a boolean `has_next_page`, and a repeated page cursor is an error.
 The read-only tools never create, message, or resume a session, and an invalid or inaccessible session is an error (there is no fallback to creating a new session).
 To send follow-up instructions, use `llm -m devin -o session <ID or URL> "..."` yourself.
 

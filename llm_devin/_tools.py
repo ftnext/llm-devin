@@ -430,6 +430,7 @@ def _list_messages(api: _Api, session_id: str) -> list[dict]:
     action = "read the Devin session messages"
     items: list[dict] = []
     cursor = None
+    seen_cursors: set[str] = set()
     for _ in range(MAX_MESSAGE_PAGES):
         params: dict = {"first": MESSAGES_PAGE_SIZE}
         if cursor is not None:
@@ -454,11 +455,12 @@ def _list_messages(api: _Api, session_id: str) -> list[dict]:
                 f"Could not {action}: the Devin API reported another page"
                 " without an end_cursor."
             )
-        if next_cursor == cursor:
+        if next_cursor in seen_cursors:
             raise DevinToolError(
                 f"Could not {action}: the Devin API returned the same"
                 " page cursor twice."
             )
+        seen_cursors.add(next_cursor)
         cursor = next_cursor
     raise DevinToolError(
         f"Could not {action}: more than"

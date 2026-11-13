@@ -606,6 +606,34 @@ class TestSessionMessages:
 
         assert len(mock_api.calls) == 2
 
+    def test_cursor_cycle_fails_promptly(self, mock_api):
+        def page(event_id, end_cursor):
+            return httpx2.Response(
+                200,
+                json={
+                    "items": [message(event_id, "devin", "Looking")],
+                    "end_cursor": end_cursor,
+                    "has_next_page": True,
+                },
+            )
+
+        mock_api.get(MESSAGES_ENDPOINT, params__contains={"after": "c1"}).mock(
+            return_value=page("e2", "c2")
+        )
+        mock_api.get(MESSAGES_ENDPOINT, params__contains={"after": "c2"}).mock(
+            return_value=page("e3", "c1")
+        )
+        mock_api.get(MESSAGES_ENDPOINT).mock(return_value=page("e1", "c1"))
+
+        with pytest.raises(Exception, match="same page cursor twice"):
+            Devin().session_messages(SESSION_ID)
+
+        assert [call.url.params.get("after") for call in mock_api.calls] == [
+            None,
+            "c1",
+            "c2",
+        ]
+
     def test_next_page_without_cursor(self, mock_api):
         mock_api.get(MESSAGES_ENDPOINT).mock(
             return_value=httpx2.Response(
