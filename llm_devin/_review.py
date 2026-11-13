@@ -85,7 +85,15 @@ def _request_review(pr_url, commit, json_output, key, start):
     except httpx2.HTTPStatusError as ex:
         raise _review_error(ex.response, pr_url, commit, start) from ex
     except httpx2.RequestError as ex:
-        raise click.ClickException("Could not reach the Devin API") from ex
+        if start and not isinstance(ex, (httpx2.ConnectError, httpx2.ConnectTimeout)):
+            raise click.ClickException(
+                f"Devin Review request outcome is unknown ({type(ex).__name__})."
+                " The review may have started."
+                f" Run 'llm devin review status {pr_url}' before retrying."
+            ) from ex
+        raise click.ClickException(
+            f"Could not reach the Devin API ({type(ex).__name__})"
+        ) from ex
     try:
         body = response.json()
     except ValueError as ex:

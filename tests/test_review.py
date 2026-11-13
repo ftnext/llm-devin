@@ -170,13 +170,40 @@ def test_non_json(mock_review_api):
 
 
 @pytest.mark.parametrize("command", ["start", "status"])
-def test_network_error(mock_review_api, command):
+@pytest.mark.parametrize("error", [httpx2.ConnectError, httpx2.ConnectTimeout])
+def test_network_error(mock_review_api, command, error):
     route = mock_review_api.post if command == "start" else mock_review_api.get
-    route(ENDPOINT).mock(side_effect=[httpx2.ConnectError("offline")])
+    route(ENDPOINT).mock(side_effect=[error("offline")])
     result = invoke(command, PR_URL, "--json")
     assert result.exit_code == 1
     assert result.stdout == ""
     assert "Could not reach the Devin API" in result.stderr
+    assert error.__name__ in result.stderr
+    assert "outcome is unknown" not in result.stderr
+    assert len(mock_review_api.calls) == 1
+
+
+@pytest.mark.parametrize("command", ["start", "status"])
+@pytest.mark.parametrize("error", [
+    httpx2.ReadTimeout, httpx2.WriteTimeout, httpx2.RemoteProtocolError,
+])
+def test_uncertain_network_outcome(mock_review_api, command, error):
+    route = mock_review_api.post if command == "start" else mock_review_api.get
+    route(ENDPOINT).mock(side_effect=[error("connection interrupted")])
+    result = invoke(command, PR_URL, "--json")
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert error.__name__ in result.stderr
+    assert len(mock_review_api.calls) == 1
+    if command == "start":
+        assert "request outcome is unknown" in result.stderr
+        assert "review may have started" in result.stderr
+        assert f"llm devin review status {PR_URL}" in result.stderr
+        assert "before retrying" in result.stderr
+        assert "Could not reach" not in result.stderr
+    else:
+        assert "Could not reach the Devin API" in result.stderr
+        assert "outcome is unknown" not in result.stderr
 
 
 @pytest.mark.parametrize("variable, message", [
