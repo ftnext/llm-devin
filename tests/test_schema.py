@@ -146,7 +146,20 @@ def test_continuation_without_schema(mock_api):
     setup_continuation(mock_api, None, schema_mode=False)
     chunks, metadata = execute(schema=None, conversation=history())
     assert chunks == ["New chat"]
-    assert metadata == {"session_id": SESSION_ID, "end_cursor": "new-cursor"}
+    assert metadata == {
+        "session_id": SESSION_ID, "end_cursor": "new-cursor",
+        "structured_output_schema": SCHEMA,
+    }
+
+
+def test_schema_continuation_after_plain_text_turn(mock_api):
+    setup_continuation(mock_api, None, schema_mode=False)
+    _, metadata = execute(schema=None, conversation=history())
+    conversation = SimpleNamespace(responses=[SimpleNamespace(response_json=metadata)])
+    mock_api.routes.clear()
+    setup_continuation(mock_api, {"name": "new"})
+    chunks, _ = execute(conversation=conversation)
+    assert chunks == ['{"name": "new"}']
 
 
 @pytest.mark.parametrize("mode", ["fast-ultra", "swe-2-medium", "swe-2-high", "swe-2-max"])

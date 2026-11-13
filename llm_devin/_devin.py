@@ -379,6 +379,9 @@ class DevinModel(llm.KeyModel):
             "session_id": session_id,
             "end_cursor": poll_state["cursor"],
         }
+        recorded_schema = (previous_state or {}).get("structured_output_schema")
+        if not schema_mode and recorded_schema is not None:
+            response.response_json["structured_output_schema"] = recorded_schema
         if schema_mode:
             value = session_detail.get("structured_output")
             location = session_url(session_id)
