@@ -148,7 +148,7 @@ def _uncertain_start_error(reason: str) -> DevinToolError:
     return DevinToolError(
         f"Could not confirm whether a Devin session was started ({reason})."
         " A session may already exist and consume ACUs: check the Devin web"
-        " app before retrying. This toolbox will not start another session."
+        " app before retrying. This attempt counts toward the session limit."
     )
 
 

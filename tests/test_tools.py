@@ -266,7 +266,7 @@ class TestStartSession:
         assert str(excinfo.value) == (
             f"Could not confirm whether a Devin session was started ({reason})."
             " A session may already exist and consume ACUs: check the Devin web"
-            " app before retrying. This toolbox will not start another session."
+            " app before retrying. This attempt counts toward the session limit."
         )
         assert excinfo.value.__cause__ is None
         with pytest.raises(Exception, match="at most 1 session"):
