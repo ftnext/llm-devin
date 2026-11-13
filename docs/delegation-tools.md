@@ -15,6 +15,7 @@ Tools require LLM 0.26 or later. With older versions the `devin` and `deepwiki` 
 
 The handoff is asynchronous: Devin works for minutes or hours, so the calling model is expected to report the session URL to you and check back later, not to wait.
 While the session is still working, `Devin_session_status` returns a `note` telling the model not to poll in a loop.
+Malformed API responses (for example a status without `status`, or a message page without a boolean `has_next_page`) are returned as errors rather than partial results.
 The read-only tools never create, message, or resume a session, and an invalid or inaccessible session is an error (there is no fallback to creating a new session).
 To send follow-up instructions, use `llm -m devin -o session <ID or URL> "..."` yourself.
 
@@ -63,7 +64,7 @@ Invalid options raise `ValueError` when the toolbox is created.
 ## Agent modes (Fusion, SWE-2)
 
 `devin_mode` accepts this subset of the [documented values](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions): `normal`, `lite`, `fusion`, `swe-2-medium`, `swe-2-high`, `swe-2-max`.
-`fast`, `fast-ultra` and `ultra` are intentionally not available to the calling model. The `devin` model itself accepts `-o devin_mode fast` or `-o devin_mode ultra`; it does not support `fast-ultra` yet.
+`fast`, `fast-ultra` and `ultra` are intentionally not available to the calling model. Use `llm -m devin -o devin_mode fast` or `-o devin_mode ultra` directly if you need them.
 According to the API reference, modes other than `normal`, `fast`, `lite`, `ultra` and `fusion` select the web app agent mode of the same name, and preview modes are subject to the same feature flags and enterprise restrictions as the web app.
 
 These are **agent modes**, not raw model inference: every call starts a full Devin session (VM, repository access, planning, PRs) billed in ACUs.
