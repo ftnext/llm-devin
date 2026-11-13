@@ -56,13 +56,14 @@ llm -m gpt-4.1-mini -T 'Devin(max_acu_limit=3, devin_mode="fusion")' --td --ta "
 | `devin_mode` | unset | Fixes the agent mode. When unset, the model may choose one of the modes below, or omit it to use the organization default. |
 | `max_sessions` | `1` | How many sessions one toolbox instance (one `llm` prompt or one `llm chat`) may start (1-10). |
 
-A start attempt that fails with an HTTP 4xx error does not count toward `max_sessions`. A timeout, network error or HTTP 5xx does count, because the session may have been created anyway; check the Devin web app before retrying.
+A start attempt rejected with an HTTP 4xx error (for example an invalid key or invalid repository) does not count toward `max_sessions`.
+Any other failure counts. A timeout or interrupted connection after the request was sent, an HTTP 5xx or an unexpected response is reported as "Could not confirm whether a Devin session was started", because the session may already exist and consume ACUs; check the Devin web app before retrying.
 Invalid options raise `ValueError` when the toolbox is created.
 
 ## Agent modes (Fusion, SWE-2)
 
 `devin_mode` accepts this subset of the [documented values](https://docs.devin.ai/api-reference/v3/sessions/post-organizations-sessions): `normal`, `lite`, `fusion`, `swe-2-medium`, `swe-2-high`, `swe-2-max`.
-`fast`, `fast-ultra` and `ultra` are intentionally not available to the calling model; use `llm -m devin -o devin_mode ...` directly if you need them.
+`fast`, `fast-ultra` and `ultra` are intentionally not available to the calling model. The `devin` model itself accepts `-o devin_mode fast` or `-o devin_mode ultra`; it does not support `fast-ultra` yet.
 According to the API reference, modes other than `normal`, `fast`, `lite`, `ultra` and `fusion` select the web app agent mode of the same name, and preview modes are subject to the same feature flags and enterprise restrictions as the web app.
 
 These are **agent modes**, not raw model inference: every call starts a full Devin session (VM, repository access, planning, PRs) billed in ACUs.

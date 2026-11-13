@@ -34,9 +34,17 @@ STILL_WORKING_HINT = (
 
 
 class DevinToolError(Exception):
-    def __init__(self, message: str, status_code: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        reason: str | None = None,
+        request_sent: bool = False,
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.reason = reason
+        self.request_sent = request_sent
 
 
 def _bounded_int(value, name: str, low: int, high: int) -> int:
@@ -119,10 +127,28 @@ def _request_error(action: str, ex: Exception) -> DevinToolError:
             f"Could not {action}: Devin API returned HTTP {status_code}"
             f"{suffix}.{hint}",
             status_code=status_code,
+            reason=f"HTTP {status_code}{suffix}",
+            request_sent=True,
+        )
+    reason = type(ex).__name__
+    if isinstance(ex, (httpx2.ConnectError, httpx2.ConnectTimeout)):
+        return DevinToolError(
+            f"Could not {action}: could not reach the Devin API ({reason}).",
+            reason=reason,
         )
     return DevinToolError(
-        f"Could not {action}: could not reach the Devin API"
-        f" ({type(ex).__name__})."
+        f"Could not {action}: no complete response from the Devin API"
+        f" ({reason}).",
+        reason=reason,
+        request_sent=True,
+    )
+
+
+def _uncertain_start_error(reason: str) -> DevinToolError:
+    return DevinToolError(
+        f"Could not confirm whether a Devin session was started ({reason})."
+        " A session may already exist and consume ACUs: check the Devin web"
+        " app before retrying. This toolbox will not start another session."
     )
 
 
@@ -133,7 +159,9 @@ def _json_object(response: httpx2.Response, action: str) -> dict:
         body = None
     if not isinstance(body, dict):
         raise DevinToolError(
-            f"Could not {action}: unexpected response from the Devin API."
+            f"Could not {action}: unexpected response from the Devin API.",
+            reason="unexpected response",
+            request_sent=True,
         )
     return body
 
@@ -274,14 +302,14 @@ class Devin(llm.Toolbox):
                 if ex.status_code is not None and 400 <= ex.status_code < 500:
                     with self._budget_lock:
                         self._attempts -= 1
+                    raise
+                if ex.request_sent:
+                    raise _uncertain_start_error(ex.reason) from None
                 raise
         session_id = body.get("session_id")
         url = body.get("url")
         if not isinstance(session_id, str) or not isinstance(url, str):
-            raise DevinToolError(
-                "Could not start a Devin session: unexpected response from"
-                " the Devin API. Check the Devin web app before retrying."
-            )
+            raise _uncertain_start_error("unexpected response")
         with self._budget_lock:
             self._started.append(session_id)
         return {

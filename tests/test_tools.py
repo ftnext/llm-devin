@@ -235,27 +235,80 @@ class TestStartSession:
         assert result["session_id"] == SESSION_ID
 
     @pytest.mark.parametrize(
-        "failure",
+        "failure, reason",
         [
-            httpx2.Response(500),
-            httpx2.ReadTimeout("timed out"),
+            (httpx2.Response(500), "HTTP 500"),
+            (
+                httpx2.Response(502, json={"detail": "bad gateway"}),
+                "HTTP 502 (bad gateway)",
+            ),
+            (httpx2.ReadTimeout("timed out"), "ReadTimeout"),
+            (httpx2.WriteTimeout("timed out"), "WriteTimeout"),
+            (httpx2.RemoteProtocolError("closed"), "RemoteProtocolError"),
+            (httpx2.ReadError("reset"), "ReadError"),
+            (httpx2.Response(200, text="<html>"), "unexpected response"),
+            (httpx2.Response(200, json={"status": "new"}), "unexpected response"),
         ],
     )
-    def test_uncertain_failure_uses_budget(self, mock_api, failure):
-        side_effect = failure if isinstance(failure, Exception) else None
+    def test_uncertain_start_warns_session_may_exist(
+        self, mock_api, failure, reason
+    ):
         route = mock_api.post(SESSIONS_ENDPOINT)
-        if side_effect is not None:
-            route.mock(side_effect=[side_effect])
+        if isinstance(failure, Exception):
+            route.mock(side_effect=[failure])
         else:
             route.mock(return_value=failure)
         toolbox = Devin()
 
-        with pytest.raises(Exception, match="Could not start a Devin session"):
-            toolbox.start_session("Task")
-        with pytest.raises(Exception, match="at most 1 session"):
+        with pytest.raises(Exception) as excinfo:
             toolbox.start_session("Task")
 
+        assert str(excinfo.value) == (
+            f"Could not confirm whether a Devin session was started ({reason})."
+            " A session may already exist and consume ACUs: check the Devin web"
+            " app before retrying. This toolbox will not start another session."
+        )
+        assert excinfo.value.__cause__ is None
+        with pytest.raises(Exception, match="at most 1 session"):
+            toolbox.start_session("Task")
         assert len(mock_api.calls) == 1
+
+    @pytest.mark.parametrize(
+        "failure",
+        [httpx2.ConnectError("refused"), httpx2.ConnectTimeout("timed out")],
+    )
+    def test_connect_failure_is_not_reported_as_maybe_created(
+        self, mock_api, failure
+    ):
+        mock_api.post(SESSIONS_ENDPOINT).mock(side_effect=[failure])
+        toolbox = Devin()
+
+        with pytest.raises(Exception) as excinfo:
+            toolbox.start_session("Task")
+
+        assert str(excinfo.value) == (
+            "Could not start a Devin session: could not reach the Devin API"
+            f" ({type(failure).__name__})."
+        )
+        with pytest.raises(Exception, match="at most 1 session"):
+            toolbox.start_session("Task")
+        assert len(mock_api.calls) == 1
+
+    @pytest.mark.parametrize("status_code", [401, 403, 422])
+    def test_rejection_is_not_reported_as_maybe_created(
+        self, mock_api, status_code
+    ):
+        mock_api.post(SESSIONS_ENDPOINT).mock(
+            return_value=httpx2.Response(status_code)
+        )
+
+        with pytest.raises(Exception) as excinfo:
+            Devin().start_session("Task")
+
+        assert str(excinfo.value).startswith(
+            f"Could not start a Devin session: Devin API returned HTTP {status_code}."
+        )
+        assert "may already exist" not in str(excinfo.value)
 
     def test_missing_key(self, monkeypatch, mock_api):
         monkeypatch.delenv("LLM_DEVIN_KEY")
@@ -272,14 +325,6 @@ class TestStartSession:
             Devin().start_session("Task")
 
         assert mock_api.calls == []
-
-    def test_unexpected_response(self, mock_api):
-        mock_api.post(SESSIONS_ENDPOINT).mock(
-            return_value=httpx2.Response(200, json={"status": "new"})
-        )
-
-        with pytest.raises(Exception, match="Check the Devin web app"):
-            Devin().start_session("Task")
 
 
 class TestErrorSanitization:
