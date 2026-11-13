@@ -248,6 +248,12 @@ class TestStartSession:
             (httpx2.ReadError("reset"), "ReadError"),
             (httpx2.Response(200, text="<html>"), "unexpected response"),
             (httpx2.Response(200, json={"status": "new"}), "unexpected response"),
+            (created(session_id="", url=""), "unexpected response"),
+            (created(url="https://example.com/x"), "unexpected response"),
+            (
+                created(url="https://app.devin.ai/sessions/" + "f" * 32),
+                "unexpected response",
+            ),
         ],
     )
     def test_uncertain_start_warns_session_may_exist(
@@ -353,6 +359,19 @@ class TestErrorSanitization:
             " could not reach the Devin API (ConnectError)."
         )
 
+    def test_detail_echoing_key_is_redacted(self, mock_api):
+        mock_api.post(SESSIONS_ENDPOINT).mock(
+            return_value=httpx2.Response(
+                422, json={"detail": f"invalid header: Bearer {API_KEY}"}
+            )
+        )
+
+        with pytest.raises(Exception) as excinfo:
+            Devin().start_session("Task")
+
+        assert API_KEY not in str(excinfo.value)
+        assert "Bearer [redacted]" in str(excinfo.value)
+
     def test_long_detail_is_truncated(self, mock_api):
         mock_api.get(SESSION_ENDPOINT).mock(
             return_value=httpx2.Response(500, json={"detail": "x" * 1000})
@@ -420,6 +439,34 @@ class TestSessionStatus:
         result = Devin().session_status(SESSION_ID)
 
         assert "note" not in result
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"session_id": SESSION_ID, "url": SESSION_URL},
+            {
+                "session_id": SESSION_ID,
+                "url": SESSION_URL,
+                "status": None,
+                "created_at": 1000,
+                "updated_at": 1000,
+                "acus_consumed": 0,
+            },
+        ],
+    )
+    def test_malformed_status_is_rejected(self, mock_api, body):
+        mock_api.get(SESSION_ENDPOINT).mock(
+            return_value=httpx2.Response(200, json=body)
+        )
+
+        with pytest.raises(Exception) as excinfo:
+            Devin().session_status(SESSION_ID)
+
+        assert str(excinfo.value) == (
+            "Could not read the Devin session:"
+            " unexpected response from the Devin API."
+        )
 
     def test_invalid_reference_sends_no_request(self, mock_api):
         with pytest.raises(Exception, match="Invalid Devin session"):
@@ -513,6 +560,51 @@ class TestSessionMessages:
             Devin().session_messages(SESSION_ID, **kwargs)
 
         assert mock_api.calls == []
+
+    @pytest.mark.parametrize(
+        "page",
+        [
+            {"items": [message("e1", "devin", "Done")]},
+            {"items": [message("e1", "devin", "Done")], "has_next_page": None},
+            {"items": [message("e1", "devin", "Done")], "has_next_page": 0},
+            {"items": ["Done"], "has_next_page": False},
+            {"items": [{"source": "devin"}], "has_next_page": False},
+            {
+                "items": [{"source": "devin", "message": None}],
+                "has_next_page": False,
+            },
+            {"items": [{"message": "Done"}], "has_next_page": False},
+        ],
+    )
+    def test_malformed_page_is_rejected(self, mock_api, page):
+        mock_api.get(MESSAGES_ENDPOINT).mock(
+            return_value=httpx2.Response(200, json=page)
+        )
+
+        with pytest.raises(Exception) as excinfo:
+            Devin().session_messages(SESSION_ID)
+
+        assert str(excinfo.value) == (
+            "Could not read the Devin session messages:"
+            " unexpected response from the Devin API."
+        )
+
+    def test_repeated_cursor_fails_promptly(self, mock_api):
+        mock_api.get(MESSAGES_ENDPOINT).mock(
+            return_value=httpx2.Response(
+                200,
+                json={
+                    "items": [message("e1", "devin", "Looking")],
+                    "end_cursor": "c1",
+                    "has_next_page": True,
+                },
+            )
+        )
+
+        with pytest.raises(Exception, match="same page cursor twice"):
+            Devin().session_messages(SESSION_ID)
+
+        assert len(mock_api.calls) == 2
 
     def test_next_page_without_cursor(self, mock_api):
         mock_api.get(MESSAGES_ENDPOINT).mock(

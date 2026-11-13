@@ -27,6 +27,14 @@ MAX_DETAIL_CHARS = 200
 MAX_PROMPT_CHARS = 30000
 MAX_TITLE_CHARS = 200
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+SESSION_REQUIRED_FIELDS = (
+    "session_id",
+    "url",
+    "status",
+    "created_at",
+    "updated_at",
+    "acus_consumed",
+)
 STILL_WORKING_HINT = (
     "Devin is still working asynchronously. Do not poll in a loop:"
     " share the session URL with the user and check again later."
@@ -99,20 +107,20 @@ def _org_id() -> str:
         raise DevinToolError(str(ex)) from None
 
 
-def _problem_detail(response: httpx2.Response) -> str | None:
+def _problem_detail(response: httpx2.Response, secret: str) -> str | None:
     try:
         body = response.json()
     except ValueError:
         return None
     if isinstance(body, dict) and isinstance(body.get("detail"), str):
-        return body["detail"][:MAX_DETAIL_CHARS]
+        return body["detail"].replace(secret, "[redacted]")[:MAX_DETAIL_CHARS]
     return None
 
 
-def _request_error(action: str, ex: Exception) -> DevinToolError:
+def _request_error(action: str, ex: Exception, secret: str) -> DevinToolError:
     if isinstance(ex, httpx2.HTTPStatusError):
         status_code = ex.response.status_code
-        detail = _problem_detail(ex.response)
+        detail = _problem_detail(ex.response, secret)
         suffix = f" ({detail})" if detail else ""
         if status_code == 401:
             hint = " Check the Devin API key."
@@ -152,23 +160,28 @@ def _uncertain_start_error(reason: str) -> DevinToolError:
     )
 
 
+def _unexpected_response(action: str) -> DevinToolError:
+    return DevinToolError(
+        f"Could not {action}: unexpected response from the Devin API.",
+        reason="unexpected response",
+        request_sent=True,
+    )
+
+
 def _json_object(response: httpx2.Response, action: str) -> dict:
     try:
         body = response.json()
     except ValueError:
         body = None
     if not isinstance(body, dict):
-        raise DevinToolError(
-            f"Could not {action}: unexpected response from the Devin API.",
-            reason="unexpected response",
-            request_sent=True,
-        )
+        raise _unexpected_response(action)
     return body
 
 
 class _Api:
     def __init__(self):
         key = _api_key()
+        self._key = key
         self._base_url = f"{_devin.API_BASE_URL}/organizations/{_org_id()}"
         self._client = _devin.create_http_client(
             {"Authorization": f"Bearer {key}"}
@@ -187,7 +200,7 @@ class _Api:
             )
             response.raise_for_status()
         except (httpx2.RequestError, httpx2.HTTPStatusError) as ex:
-            raise _request_error(action, ex) from None
+            raise _request_error(action, ex, self._key) from None
         return _json_object(response, action)
 
 
@@ -308,7 +321,7 @@ class Devin(llm.Toolbox):
                 raise
         session_id = body.get("session_id")
         url = body.get("url")
-        if not isinstance(session_id, str) or not isinstance(url, str):
+        if not _is_session_reference(session_id, url):
             raise _uncertain_start_error("unexpected response")
         with self._budget_lock:
             self._started.append(session_id)
@@ -345,10 +358,13 @@ class Devin(llm.Toolbox):
         and structured output. Does not wait for the session to finish.
         """
         session_id = _session_id(session)
+        action = "read the Devin session"
         with _Api() as api:
-            body = api.request(
-                "GET", f"/sessions/{session_id}", "read the Devin session"
-            )
+            body = api.request("GET", f"/sessions/{session_id}", action)
+        if not isinstance(body.get("status"), str) or any(
+            field not in body for field in SESSION_REQUIRED_FIELDS
+        ):
+            raise _unexpected_response(action)
         status = body.get("status")
         status_detail = body.get("status_detail")
         result = {
@@ -394,9 +410,7 @@ class Devin(llm.Toolbox):
             items = [item for item in items if item.get("source") == source]
         messages = []
         for item in items[-limit:]:
-            text = item.get("message")
-            if not isinstance(text, str):
-                text = ""
+            text = item["message"]
             entry = {
                 "source": item.get("source"),
                 "created_at": item.get("created_at"),
@@ -424,20 +438,50 @@ def _list_messages(api: _Api, session_id: str) -> list[dict]:
             "GET", f"/sessions/{session_id}/messages", action, params=params
         )
         page = data.get("items")
-        if not isinstance(page, list):
-            raise DevinToolError(
-                f"Could not {action}: unexpected response from the Devin API."
-            )
-        items.extend(item for item in page if isinstance(item, dict))
-        if not data.get("has_next_page"):
+        has_next_page = data.get("has_next_page")
+        if (
+            not isinstance(page, list)
+            or not isinstance(has_next_page, bool)
+            or not all(_is_message(item) for item in page)
+        ):
+            raise _unexpected_response(action)
+        items.extend(page)
+        if not has_next_page:
             return items
-        cursor = data.get("end_cursor")
-        if not isinstance(cursor, str) or not cursor:
+        next_cursor = data.get("end_cursor")
+        if not isinstance(next_cursor, str) or not next_cursor:
             raise DevinToolError(
                 f"Could not {action}: the Devin API reported another page"
                 " without an end_cursor."
             )
+        if next_cursor == cursor:
+            raise DevinToolError(
+                f"Could not {action}: the Devin API returned the same"
+                " page cursor twice."
+            )
+        cursor = next_cursor
     raise DevinToolError(
         f"Could not {action}: more than"
         f" {MAX_MESSAGE_PAGES * MESSAGES_PAGE_SIZE} messages."
     )
+
+
+def _is_message(item) -> bool:
+    return (
+        isinstance(item, dict)
+        and isinstance(item.get("source"), str)
+        and isinstance(item.get("message"), str)
+    )
+
+
+def _is_session_reference(session_id, url) -> bool:
+    if not isinstance(session_id, str) or not isinstance(url, str):
+        return False
+    try:
+        return (
+            _devin.parse_session_reference(session_id)
+            == _devin.parse_session_reference(url)
+            == session_id
+        )
+    except llm.ModelError:
+        return False
