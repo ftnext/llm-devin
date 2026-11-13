@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -74,18 +75,21 @@ def create_http_client(headers: dict[str, str]) -> httpx2.Client:
     return httpx2.Client(headers=headers, timeout=TIMEOUT)
 
 
-def print_immediately(*objects) -> None:
+def print_immediately(*objects, file=None) -> None:
     # ref: https://github.com/simonw/llm/blob/0.26/llm/cli.py#L867-L868
-    print(*objects)
-    sys.stdout.flush()
+    output = file if file is not None else sys.stdout
+    print(*objects, file=output)
+    output.flush()
 
 
 class DevinModel(llm.KeyModel):
     needs_key = "devin"
     key_env_var = "LLM_DEVIN_KEY"
     can_stream = True
+    supports_schema = True
 
     BASE_URL = API_BASE_URL
+    STALE_OUTPUT_POLLS = 12
 
     class Options(llm.Options):
         debug: Optional[bool] = Field(
@@ -114,9 +118,10 @@ class DevinModel(llm.KeyModel):
         )
         devin_mode: Optional[str] = Field(
             description="Devin agent mode for the new session"
-            " (normal, fast, lite, ultra, fusion)",
+            " (normal, fast, lite, ultra, fusion, fast-ultra,"
+            " swe-2-medium, swe-2-high, swe-2-max)",
             default=None,
-            pattern="^(normal|fast|lite|ultra|fusion)$",
+            pattern="^(normal|fast|lite|ultra|fusion|fast-ultra|swe-2-medium|swe-2-high|swe-2-max)$",
         )
         session: Optional[str] = Field(
             description="Existing Devin session ID or URL to send the message to"
@@ -130,7 +135,7 @@ class DevinModel(llm.KeyModel):
     def _org_id(self) -> str:
         return resolve_org_id()
 
-    def _setup_debug_logging(self, debug: bool) -> logging.FileHandler | None:
+    def _setup_debug_logging(self, debug: bool, *, schema_mode=False) -> logging.FileHandler | None:
         if not debug:
             return None
         log_dir = llm.user_dir() / "devin"
@@ -144,7 +149,7 @@ class DevinModel(llm.KeyModel):
         handler.setLevel(logging.DEBUG)
         logger.addHandler(handler)
         logger.setLevel(logging.DEBUG)
-        print_immediately(f"Debug log: {log_file}")
+        print_immediately(f"Debug log: {log_file}", file=sys.stderr if schema_mode else None)
         return handler
 
     def _teardown_debug_logging(
@@ -157,7 +162,7 @@ class DevinModel(llm.KeyModel):
 
     def execute(self, prompt, stream, response, conversation, key):
         debug = prompt.options.debug or False
-        handler = self._setup_debug_logging(debug)
+        handler = self._setup_debug_logging(debug, schema_mode=isinstance(prompt.schema, dict))
         try:
             yield from self._execute(
                 prompt, stream, response, conversation, key
@@ -185,6 +190,7 @@ class DevinModel(llm.KeyModel):
         return {
             "session_id": session_id,
             "end_cursor": response_json.get("end_cursor"),
+            "structured_output_schema": response_json.get("structured_output_schema"),
         }
 
     def _state_from_responses(self, conversation) -> dict | None:
@@ -216,7 +222,7 @@ class DevinModel(llm.KeyModel):
         response_json = LogStore(db).turn_response_json(row["id"])
         return self._state_from_response_json(response_json)
 
-    def _get_previous_state(self, conversation, explicit_session) -> dict | None:
+    def _get_previous_state(self, conversation, explicit_session, *, schema_mode=False) -> dict | None:
         if explicit_session is not None:
             session_id = parse_session_reference(explicit_session)
             if self._has_history(conversation):
@@ -232,7 +238,8 @@ class DevinModel(llm.KeyModel):
                     )
             else:
                 state = {"session_id": session_id, "end_cursor": None}
-            print_immediately("Continuing Devin session:", session_url(session_id))
+            print_immediately("Continuing Devin session:", session_url(session_id),
+                              file=sys.stderr if schema_mode else None)
             return state
         if not self._has_history(conversation):
             return None
@@ -266,9 +273,19 @@ class DevinModel(llm.KeyModel):
             yield from self._run(client, prompt, response, conversation, org_id)
 
     def _run(self, client, prompt, response, conversation, org_id):
+        schema = prompt.schema if isinstance(prompt.schema, dict) else None
+        schema_mode = schema is not None
         previous_state = self._get_previous_state(
-            conversation, prompt.options.session
+            conversation, prompt.options.session, schema_mode=schema_mode
         )
+        if previous_state is not None and schema_mode:
+            if not self._same_json(previous_state.get("structured_output_schema"), schema):
+                raise llm.ModelError(
+                    "The Devin API cannot change a session's structured output schema"
+                    " after creation; start a new conversation with --schema, or"
+                    " continue with the same schema the session was created with"
+                    " (or without --schema for plain text)."
+                )
 
         seen_event_ids: set[str] = set()
 
@@ -282,12 +299,16 @@ class DevinModel(llm.KeyModel):
             explicit = prompt.options.session is not None
 
             try:
+                if schema_mode:
+                    baseline = self._get_session(client, org_id, session_id).get("structured_output")
                 self._collect_existing_event_ids(
                     client, org_id, session_id, poll_state, seen_event_ids,
                 )
             except (httpx2.RequestError, httpx2.HTTPStatusError) as ex:
                 if explicit:
                     raise self._explicit_session_error(session_id, ex) from ex
+                if schema_mode:
+                    raise
 
             try:
                 send_message_response = client.post(
@@ -320,10 +341,12 @@ class DevinModel(llm.KeyModel):
                 extra={"data": create_session_data},
             )
             session_id = create_session_data["session_id"]
-            print_immediately("Devin URL:", create_session_data["url"])
+            print_immediately("Devin URL:", create_session_data["url"],
+                              file=sys.stderr if schema_mode else None)
             poll_state = {"cursor": None}
 
         devin_messages: list[str] = []
+        stale_polls = 0
         while True:
             try:
                 session_detail = self._get_session(client, org_id, session_id)
@@ -331,30 +354,76 @@ class DevinModel(llm.KeyModel):
                 pass
             else:
                 try:
-                    yield from self._drain_messages(
+                    messages = self._drain_messages(
                         client, org_id, session_id,
                         devin_messages, poll_state,
                         seen_event_ids,
                     )
+                    for message in messages:
+                        if not schema_mode:
+                            yield message
                 except (httpx2.RequestError, httpx2.HTTPStatusError):
                     pass
 
                 status = session_detail["status"]
                 status_detail = session_detail.get("status_detail")
-                if status in {"exit", "error", "suspended"}:
-                    break
-                if status == "running" and status_detail in {
-                    "finished",
-                    "waiting_for_user",
-                    "waiting_for_approval",
-                }:
-                    break
+                terminal = status in {"exit", "error", "suspended"} or (
+                    status == "running" and status_detail in {
+                        "finished",
+                        "waiting_for_user",
+                        "waiting_for_approval",
+                    }
+                )
+                if terminal:
+                    if (
+                        schema_mode
+                        and previous_state is not None
+                        and status != "error"
+                        and stale_polls < self.STALE_OUTPUT_POLLS
+                        and self._is_stale(session_detail.get("structured_output"), baseline)
+                    ):
+                        stale_polls += 1
+                    else:
+                        break
             time.sleep(5)
 
         response.response_json = {
             "session_id": session_id,
             "end_cursor": poll_state["cursor"],
         }
+        recorded_schema = (previous_state or {}).get("structured_output_schema")
+        if not schema_mode and recorded_schema is not None:
+            response.response_json["structured_output_schema"] = recorded_schema
+        if schema_mode:
+            value = session_detail.get("structured_output")
+            location = session_url(session_id)
+            if status == "error":
+                raise llm.ModelError(
+                    f"Devin session ended with status={status},"
+                    f" status_detail={status_detail} ({location})."
+                )
+            if previous_state is not None and self._is_stale(value, baseline):
+                raise llm.ModelError(
+                    "No new structured output was produced for this turn;"
+                    f" run llm devin status {location} to inspect."
+                )
+            if value is None:
+                raise llm.ModelError(
+                    f"Devin session ended with status={status},"
+                    f" status_detail={status_detail} ({location}) without structured output."
+                )
+            response.response_json.update(
+                structured_output_schema=schema, structured_output=value,
+            )
+            yield json.dumps(value, ensure_ascii=False)
+
+    @staticmethod
+    def _same_json(left, right) -> bool:
+        return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+    @classmethod
+    def _is_stale(cls, value, baseline) -> bool:
+        return value is None or cls._same_json(value, baseline)
 
     @staticmethod
     def _split_csv(value: str | None) -> list[str] | None:
@@ -366,6 +435,8 @@ class DevinModel(llm.KeyModel):
     def _build_create_session_json(self, prompt) -> dict:
         options = prompt.options
         request_json: dict = {"prompt": prompt.prompt}
+        if isinstance(prompt.schema, dict):
+            request_json["structured_output_schema"] = prompt.schema
         optional_fields = {
             "title": options.title,
             "tags": self._split_csv(options.tags),

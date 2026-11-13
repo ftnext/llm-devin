@@ -67,6 +67,16 @@ Start an interactive chat session:
 llm chat -m devin
 ```
 
+### Structured output
+
+Use llm's native schema support to return validated JSON, with diagnostics on stderr:
+
+```bash
+llm -m devin --schema 'title, risk int' "Assess this change"
+```
+
+See [structured output](docs/structured-output.md) for schema files, `--schema-multi`, and continuation rules.
+
 ### Reading an existing Devin session
 
 `llm devin status` and `llm devin messages` read an existing session without sending anything to Devin. They only call read-only Devin API endpoints (get session, list session messages): no session is created, no message is sent, and no suspended session is resumed. They need no local `llm` conversation history, so they work after the CLI exited or the connection dropped, and for sessions started from the Devin web app or another machine. Each command fetches once and exits; it does not poll until the session finishes.
