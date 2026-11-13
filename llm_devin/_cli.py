@@ -215,9 +215,13 @@ def _echo_status(session: dict, latest: dict | None) -> None:
 
 @llm.hookimpl
 def register_commands(cli):
+    from llm_devin._review import review
+
     @cli.group()
     def devin():
         "Read the state of an existing Devin session"
+
+    devin.add_command(review)
 
     @devin.command()
     @click.argument("session")
