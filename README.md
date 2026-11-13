@@ -97,6 +97,17 @@ With `--json`, only JSON is written to standard output, so it can be piped into 
 llm -m deepwiki -o repository ftnext/llm-devin "Summarize this repository"
 ```
 
+### Devin Review
+
+Trigger a review of the latest PR head, or read its status without starting a review:
+
+```bash
+llm devin review start https://github.com/owner/repo/pull/123
+llm devin review status https://github.com/owner/repo/pull/123 --json
+```
+
+See [Devin Review](docs/devin-review.md) for permissions, commit selection, and output details. The API returns status only; findings are posted on the PR itself.
+
 ## Development
 
 To set up this plugin locally, first checkout the code:
